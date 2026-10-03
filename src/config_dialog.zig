@@ -10,6 +10,7 @@ const esi_prices = @import("esi_prices.zig");
 const eve_accounts = @import("eve_accounts.zig");
 const update = @import("update.zig");
 const updater = @import("updater.zig");
+const displays = @import("displays.zig");
 const log = @import("log.zig");
 
 const slog = log.scoped("config_dialog");
@@ -143,6 +144,7 @@ fn mainImpl(init: std.process.Init) !void {
     esi_prices.init(g_allocator, g_io);
     eve_accounts.init(g_allocator, g_io);
     updater.init(g_allocator, g_io, findMainAppWindow);
+    displays.init(g_allocator, g_io);
 
     // Single-instance enforcement: if another instance already holds the mutex, focus its window and exit.
     const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-ConfigDialog-SingleInstance");
@@ -278,6 +280,8 @@ fn mainImpl(init: std.process.Init) !void {
     _ = try win.bind("checkForUpdateNow", updater.checkForUpdateNow);
     _ = try win.bind("downloadUpdate", updater.downloadUpdate);
     _ = try win.bind("installUpdate", updater.installUpdate);
+    _ = try win.bind("getDisplays", displays.getDisplays);
+    _ = try win.bind("identifyDisplays", displays.identifyDisplays);
     _ = try win.bind("scaleLegacyPositions", scaleLegacyPositions);
     _ = try win.bind("startRegionSelect", startRegionSelect);
     _ = try win.bind("pollRegionSelectResult", pollRegionSelectResult);

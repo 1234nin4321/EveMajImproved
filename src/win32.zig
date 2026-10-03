@@ -45,6 +45,7 @@ pub const WS_EX_LAYERED = 0x00080000;
 pub const WS_EX_NOACTIVATE = 0x08000000;
 
 pub const WM_DESTROY = 0x0002;
+pub const WM_PAINT = 0x000F;
 pub const WM_MOVING = 0x0216;
 pub const WM_ACTIVATE = 0x0006;
 pub const WM_CLOSE = 0x0010;
@@ -745,6 +746,10 @@ pub extern "kernel32" fn MultiByteToWideChar(CodePage: UINT, dwFlags: DWORD, lpM
 pub extern "gdi32" fn TextOutW(hdc: HDC, x: c_int, y: c_int, lpString: [*]const u16, c: c_int) callconv(.c) BOOL;
 pub extern "gdi32" fn GetTextExtentPoint32W(hdc: HDC, lpString: [*]const u16, c: c_int, psizl: *SIZE) callconv(.c) BOOL;
 pub extern "gdi32" fn SetBkMode(hdc: HDC, mode: c_int) callconv(.c) c_int;
+pub extern "user32" fn DrawTextW(hdc: HDC, lpchText: [*]const u16, cchText: c_int, lprc: *RECT, format: UINT) callconv(.c) c_int;
+pub const DT_CENTER: UINT = 0x00000001;
+pub const DT_VCENTER: UINT = 0x00000004;
+pub const DT_SINGLELINE: UINT = 0x00000020;
 pub extern "gdi32" fn SetTextColor(hdc: HDC, color: DWORD) callconv(.c) DWORD;
 pub extern "gdi32" fn AddFontMemResourceEx(pFileView: [*]const u8, cjSize: DWORD, pvReserved: ?*anyopaque, pNumFonts: *DWORD) callconv(.c) ?HANDLE;
 pub extern "gdi32" fn CreateFontA(
@@ -934,6 +939,162 @@ pub extern "user32" fn GetMonitorInfoA(
 ) callconv(.c) BOOL;
 
 pub const MONITOR_DEFAULTTONEAREST: DWORD = 0x00000002;
+
+// Display enumeration for the config dialog's Display Config tab (displays.zig). Sizes are pinned below because these are passed straight to the OS.
+pub const MONITORINFOF_PRIMARY: DWORD = 0x00000001;
+pub const MONITORINFOEXW = extern struct {
+    cbSize: DWORD,
+    rcMonitor: RECT,
+    rcWork: RECT,
+    dwFlags: DWORD,
+    szDevice: [32]u16,
+};
+
+pub extern "user32" fn GetMonitorInfoW(hMonitor: HMONITOR, lpmi: *MONITORINFOEXW) callconv(.c) BOOL;
+
+pub const ENUM_CURRENT_SETTINGS: DWORD = 0xFFFFFFFF;
+/// Display-device variant of DEVMODEW (the printer fields of the first union are folded into dmPosition/orientation/fixedOutput).
+pub const DEVMODEW = extern struct {
+    dmDeviceName: [32]u16,
+    dmSpecVersion: WORD,
+    dmDriverVersion: WORD,
+    dmSize: WORD,
+    dmDriverExtra: WORD,
+    dmFields: DWORD,
+    dmPosition: POINT,
+    dmDisplayOrientation: DWORD,
+    dmDisplayFixedOutput: DWORD,
+    dmColor: i16,
+    dmDuplex: i16,
+    dmYResolution: i16,
+    dmTTOption: i16,
+    dmCollate: i16,
+    dmFormName: [32]u16,
+    dmLogPixels: WORD,
+    dmBitsPerPel: DWORD,
+    dmPelsWidth: DWORD,
+    dmPelsHeight: DWORD,
+    dmDisplayFlags: DWORD,
+    dmDisplayFrequency: DWORD,
+    dmICMMethod: DWORD,
+    dmICMIntent: DWORD,
+    dmMediaType: DWORD,
+    dmDitherType: DWORD,
+    dmReserved1: DWORD,
+    dmReserved2: DWORD,
+    dmPanningWidth: DWORD,
+    dmPanningHeight: DWORD,
+};
+
+pub extern "user32" fn EnumDisplaySettingsW(lpszDeviceName: [*:0]const u16, iModeNum: DWORD, lpDevMode: *DEVMODEW) callconv(.c) BOOL;
+
+pub const DISPLAY_DEVICE_ACTIVE: DWORD = 0x00000001;
+pub const DISPLAY_DEVICEW = extern struct {
+    cb: DWORD,
+    DeviceName: [32]u16,
+    DeviceString: [128]u16,
+    StateFlags: DWORD,
+    DeviceID: [128]u16,
+    DeviceKey: [128]u16,
+};
+
+pub extern "user32" fn EnumDisplayDevicesW(lpDevice: ?[*:0]const u16, iDevNum: DWORD, lpDisplayDevice: *DISPLAY_DEVICEW, dwFlags: DWORD) callconv(.c) BOOL;
+
+pub const QDC_ONLY_ACTIVE_PATHS: u32 = 0x00000002;
+pub const DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME: u32 = 1;
+pub const DISPLAYCONFIG_DEVICE_INFO_GET_TARGET_NAME: u32 = 2;
+
+pub const LUID = extern struct {
+    LowPart: u32,
+    HighPart: i32,
+};
+
+pub const DISPLAYCONFIG_PATH_SOURCE_INFO = extern struct {
+    adapterId: LUID,
+    id: u32,
+    modeInfoIdx: u32,
+    statusFlags: u32,
+};
+
+pub const DISPLAYCONFIG_RATIONAL = extern struct {
+    Numerator: u32,
+    Denominator: u32,
+};
+
+pub const DISPLAYCONFIG_PATH_TARGET_INFO = extern struct {
+    adapterId: LUID,
+    id: u32,
+    modeInfoIdx: u32,
+    outputTechnology: u32,
+    rotation: u32,
+    scaling: u32,
+    refreshRate: DISPLAYCONFIG_RATIONAL,
+    scanLineOrdering: u32,
+    targetAvailable: BOOL,
+    statusFlags: u32,
+};
+
+pub const DISPLAYCONFIG_PATH_INFO = extern struct {
+    sourceInfo: DISPLAYCONFIG_PATH_SOURCE_INFO,
+    targetInfo: DISPLAYCONFIG_PATH_TARGET_INFO,
+    flags: u32,
+};
+
+/// Only needed as QueryDisplayConfig's mode buffer, so the 48-byte union is left opaque (u64s keep its 8-byte alignment).
+pub const DISPLAYCONFIG_MODE_INFO = extern struct {
+    infoType: u32,
+    id: u32,
+    adapterId: LUID,
+    data: [6]u64,
+};
+
+pub const DISPLAYCONFIG_DEVICE_INFO_HEADER = extern struct {
+    type: u32,
+    size: u32,
+    adapterId: LUID,
+    id: u32,
+};
+
+pub const DISPLAYCONFIG_SOURCE_DEVICE_NAME = extern struct {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    viewGdiDeviceName: [32]u16,
+};
+
+pub const DISPLAYCONFIG_TARGET_DEVICE_NAME = extern struct {
+    header: DISPLAYCONFIG_DEVICE_INFO_HEADER,
+    flags: u32,
+    outputTechnology: u32,
+    edidManufactureId: u16,
+    edidProductCodeId: u16,
+    connectorInstance: u32,
+    monitorFriendlyDeviceName: [64]u16,
+    monitorDevicePath: [128]u16,
+};
+
+pub extern "user32" fn GetDisplayConfigBufferSizes(flags: u32, numPathArrayElements: *u32, numModeInfoArrayElements: *u32) callconv(.c) LONG;
+pub extern "user32" fn QueryDisplayConfig(
+    flags: u32,
+    numPathArrayElements: *u32,
+    pathArray: [*]DISPLAYCONFIG_PATH_INFO,
+    numModeInfoArrayElements: *u32,
+    modeInfoArray: [*]DISPLAYCONFIG_MODE_INFO,
+    currentTopologyId: ?*u32,
+) callconv(.c) LONG;
+pub extern "user32" fn DisplayConfigGetDeviceInfo(requestPacket: *DISPLAYCONFIG_DEVICE_INFO_HEADER) callconv(.c) LONG;
+
+comptime {
+    // Checked against mingw-w64's wingdi.h/winuser.h with sizeof/offsetof static asserts.
+    std.debug.assert(@sizeOf(MONITORINFOEXW) == 104);
+    std.debug.assert(@sizeOf(DEVMODEW) == 220);
+    std.debug.assert(@offsetOf(DEVMODEW, "dmBitsPerPel") == 168);
+    std.debug.assert(@offsetOf(DEVMODEW, "dmDisplayFrequency") == 184);
+    std.debug.assert(@sizeOf(DISPLAY_DEVICEW) == 840);
+    std.debug.assert(@sizeOf(DISPLAYCONFIG_PATH_INFO) == 72);
+    std.debug.assert(@sizeOf(DISPLAYCONFIG_MODE_INFO) == 64);
+    std.debug.assert(@sizeOf(DISPLAYCONFIG_SOURCE_DEVICE_NAME) == 84);
+    std.debug.assert(@sizeOf(DISPLAYCONFIG_TARGET_DEVICE_NAME) == 420);
+    std.debug.assert(@offsetOf(DISPLAYCONFIG_TARGET_DEVICE_NAME, "monitorDevicePath") == 164);
+}
 
 pub extern "user32" fn MonitorFromPoint(
     pt: POINT,

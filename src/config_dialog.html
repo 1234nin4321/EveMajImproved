@@ -54,6 +54,9 @@
                 <div class="tab-item" data-tab="accounts">
                     <span class="tab-glyph" aria-hidden="true">◎</span><span data-i18n="tab.accounts.title">account config</span>
                 </div>
+                <div class="tab-item" data-tab="displays">
+                    <span class="tab-glyph" aria-hidden="true">▣</span><span data-i18n="tab.displays.title">display config</span>
+                </div>
                 <div class="tab-item" data-tab="behavior">
                     <span class="tab-glyph" aria-hidden="true">✥</span><span data-i18n="tab.behavior.title">behavior</span>
                 </div>
@@ -1056,6 +1059,9 @@
                             <button type="button" onclick="addCharacter()" data-i18n="button.add-character.label">+ Add Character</button>
                             <button type="button" id="populateCharactersBtn" onclick="populateCharactersFromClients()" data-i18n="common.populateFromClients">↻ Populate from Open Clients</button>
                         </div>
+                        <div class="button-row">
+                            <button type="button" id="populateFromEveSettingsBtn" onclick="populateCharactersFromEveSettings()" data-i18n="button.populate-from-eve-settings.label">⇩ Populate from EVE Settings</button>
+                        </div>
                     </div>
                 </div>
 
@@ -1102,6 +1108,26 @@
 
                         <div class="button-row">
                             <button type="button" onclick="addAccount()" data-i18n="button.add-account.label">+ Add Account</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-content" data-panel="displays">
+                    <div class="section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.displays.section.displays.heading">Connected Displays</h3>
+                            <div class="section-heading-actions">
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
+                        </div>
+                        <p class="hint" data-i18n="tab.displays.section.displays.hint">Every display connected to this PC, arranged the way Windows sees them, with the resolution, refresh rate and scaling each one is running. View only: EVE-Maj Preview never changes your display settings. Click a display to highlight its details, or use Identify to show each display's number on screen.</p>
+
+                        <div id="displayDiagram" class="display-diagram" aria-label="Display arrangement"></div>
+                        <div id="displayList" class="display-list"></div>
+
+                        <div class="button-row">
+                            <button type="button" id="refreshDisplaysBtn" onclick="loadDisplays()" data-i18n="button.refresh-displays.label">↻ Refresh</button>
+                            <button type="button" id="identifyDisplaysBtn" onclick="identifyDisplays()" data-i18n="button.identify-displays.label">Identify Displays</button>
                         </div>
                     </div>
                 </div>
@@ -2758,6 +2784,22 @@
             <div class="modal-buttons">
                 <button id="update-available-modal-goto" class="button-primary" data-i18n="button.update-available-goto.label">Get Update</button>
                 <button id="update-available-modal-close" class="button-outline" data-i18n="common.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="eve-settings-characters-modal" class="modal">
+        <div class="modal-content modal-wide">
+            <h3 data-i18n="misc.eve-settings-characters-heading">Add Characters from EVE Settings?</h3>
+            <p class="hint" style="margin: 0 0 8px 0;" data-i18n="misc.eve-settings-characters-hint">These characters have logged in on this PC but aren't in this profile yet. Untick any you don't want, then add them. Nothing is saved until you click Save.</p>
+            <div class="eve-settings-select-row">
+                <button type="button" class="button-outline" onclick="setEveSettingsCharacterChecks(true)" data-i18n="button.select-all.label">Select All</button>
+                <button type="button" class="button-outline" onclick="setEveSettingsCharacterChecks(false)" data-i18n="button.select-none.label">Select None</button>
+            </div>
+            <div id="eveSettingsCharactersList" class="eve-settings-characters-list"></div>
+            <div class="modal-buttons">
+                <button id="eve-settings-characters-confirm" class="button-primary"></button>
+                <button id="eve-settings-characters-cancel" class="button-outline" data-i18n="common.cancel">Cancel</button>
             </div>
         </div>
     </div>

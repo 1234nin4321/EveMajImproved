@@ -3190,3 +3190,203 @@ button.confirm-delete:hover {
     margin: 0 0 12px 0;
     color: var(--color-error);
 }
+
+/* Characters tab: Populate from EVE Settings picker */
+.eve-settings-select-row {
+    display: flex;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+}
+
+.eve-settings-characters-list {
+    max-height: 50vh;
+    overflow-y: auto;
+    margin-bottom: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+}
+
+/* Doubled class to beat the base label:has(input[type="checkbox"]) margins (0,1,2). */
+.eve-settings-characters-list .eve-settings-character-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    padding: var(--space-1) var(--space-2);
+    border-bottom: 1px solid var(--color-border-faint);
+    cursor: pointer;
+}
+
+.eve-settings-character-item .label-body {
+    flex: none;
+    width: 14px;
+    height: 16px;
+    padding-left: 14px;
+}
+
+.eve-settings-character-item:last-child {
+    border-bottom: none;
+}
+
+.eve-settings-character-item.is-disabled {
+    cursor: default;
+    opacity: 0.55;
+}
+
+.eve-settings-character-item .character-portrait {
+    width: 24px;
+    height: 24px;
+}
+
+.eve-settings-character-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.eve-settings-character-name {
+    font-size: var(--fs-body);
+    color: var(--color-text);
+}
+
+.eve-settings-character-meta {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+/* Display Config tab */
+.display-diagram {
+    position: relative;
+    margin-bottom: var(--space-3);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.display-tile {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    height: auto;
+    padding: 0;
+    background: var(--color-surface);
+    border: 1px solid var(--color-border-strong);
+    border-radius: var(--radius-sm);
+    text-transform: none;
+    overflow: hidden;
+}
+
+.display-tile.is-primary {
+    border-color: var(--color-text-secondary);
+}
+
+.display-tile.is-selected {
+    border-color: var(--color-accent);
+    background: rgba(var(--color-accent-rgb), 0.12);
+}
+
+.display-tile-number {
+    font-size: 22px;
+    font-weight: var(--fw-bold);
+    line-height: 1;
+    color: var(--color-text);
+}
+
+.display-tile.is-selected .display-tile-number {
+    color: var(--color-accent);
+}
+
+.display-tile-res {
+    font-size: var(--fs-small);
+    color: var(--color-muted);
+}
+
+.display-tile-primary {
+    position: absolute;
+    top: 3px;
+    right: 5px;
+    font-size: var(--fs-small);
+    color: var(--color-accent);
+}
+
+.display-list {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: var(--space-2);
+}
+
+.display-card {
+    padding: var(--space-2) var(--space-3);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+    min-width: 0;
+}
+
+.display-card.is-selected {
+    border-color: var(--color-accent);
+}
+
+.display-card-header {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-bottom: var(--space-2);
+    cursor: pointer;
+}
+
+.display-card-number {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    font-weight: var(--fw-bold);
+    color: var(--color-accent-ink);
+    background: var(--color-accent);
+    border-radius: var(--radius-sm);
+}
+
+.display-card-name {
+    flex: 1;
+    min-width: 0;
+    font-weight: var(--fw-semibold);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.display-primary-chip {
+    top: 0;
+}
+
+.display-rows {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 3px var(--space-3);
+    font-size: var(--fs-label);
+}
+
+.display-row {
+    display: contents;
+}
+
+.display-row-label {
+    color: var(--color-muted);
+}
+
+.display-row-value {
+    color: var(--color-text-secondary);
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+.display-row-value.is-mono {
+    font-family: var(--font-mono);
+}

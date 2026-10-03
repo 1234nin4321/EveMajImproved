@@ -1345,6 +1345,11 @@ function switchTab(panelId) {
     if (panelId === 'characters') alignDetailPanelNameLabel('charactersList');
     // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
     if (panelId === 'accounts' && !accountScanStarted) scanEveAccounts();
+    // The diagram needs the panel's real width, which only exists once it's visible.
+    if (panelId === 'displays') {
+        if (!displaysLoadStarted) loadDisplays();
+        else renderDisplays();
+    }
     // A no-op on panels with no .binding-list, so every tab can share this call rather than listing each one.
     alignBindingLabelColumns(`.panel-content[data-panel="${panelId}"]`);
     // Hotkey inputs on the panel just made visible read a real clientWidth for the first time - recheck their placeholder fit.
@@ -4390,6 +4395,136 @@ function showUpdateAvailableModal(version, url, notes) {
     gotoBtn.addEventListener('click', handleGoto);
 }
 
+// ---- Display Config (view only) ----
+let displaysData = null;
+let displaysLoadStarted = false;
+let selectedDisplayNumber = null;
+
+async function loadDisplays() {
+    if (typeof webui === 'undefined') return;
+    displaysLoadStarted = true;
+    const btn = document.getElementById('refreshDisplaysBtn');
+    if (btn) btn.disabled = true;
+    try {
+        displaysData = JSON.parse(await webui.call('getDisplays'));
+        if (selectedDisplayNumber !== null && !displaysData.displays.some(d => d.number === selectedDisplayNumber)) {
+            selectedDisplayNumber = null;
+        }
+        renderDisplays();
+    } catch (error) {
+        logError('Failed to load displays:', error);
+        showStatus(t('status.displaysLoadFailed'), 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
+async function identifyDisplays() {
+    if (typeof webui === 'undefined') return;
+    try {
+        await webui.call('identifyDisplays');
+    } catch (error) {
+        logError('Failed to identify displays:', error);
+    }
+}
+
+function selectDisplay(number) {
+    selectedDisplayNumber = selectedDisplayNumber === number ? null : number;
+    renderDisplays();
+    if (selectedDisplayNumber !== null) {
+        document.getElementById(`display_${number}_card`)?.scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' });
+    }
+}
+
+function displayOrientationText(degrees) {
+    return degrees === 90 || degrees === 270
+        ? t('dynamic.displays.portrait').replace('{deg}', String(degrees))
+        : (degrees === 180 ? t('dynamic.displays.landscapeFlipped') : t('dynamic.displays.landscape'));
+}
+
+function renderDisplays() {
+    const diagram = document.getElementById('displayDiagram');
+    const list = document.getElementById('displayList');
+    if (!diagram || !list) return;
+
+    const displays = displaysData?.displays || [];
+    if (displays.length === 0) {
+        diagram.innerHTML = '';
+        diagram.style.height = '0';
+        list.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.displays.none'))}</p>`;
+        return;
+    }
+
+    // Scale the virtual desktop into the diagram box, keeping each display's real proportions and position.
+    const desk = displaysData.desktop;
+    const boxWidth = diagram.clientWidth || 560;
+    const maxHeight = 240;
+    const scale = Math.min((boxWidth - 16) / desk.width, (maxHeight - 16) / desk.height);
+    const usedWidth = desk.width * scale;
+    const usedHeight = desk.height * scale;
+    diagram.style.height = `${Math.round(usedHeight + 16)}px`;
+    const offsetX = (boxWidth - usedWidth) / 2;
+
+    diagram.innerHTML = displays.map(d => {
+        const left = offsetX + (d.bounds.x - desk.x) * scale;
+        const top = 8 + (d.bounds.y - desk.y) * scale;
+        const width = Math.max(d.bounds.width * scale - 4, 8);
+        const height = Math.max(d.bounds.height * scale - 4, 8);
+        const classes = ['display-tile'];
+        if (d.primary) classes.push('is-primary');
+        if (d.number === selectedDisplayNumber) classes.push('is-selected');
+        return `
+            <button type="button" class="${classes.join(' ')}" style="left:${left + 2}px;top:${top + 2}px;width:${width}px;height:${height}px"
+                onclick="selectDisplay(${d.number})" title="${escapeHtml(d.name)}">
+                <span class="display-tile-number">${d.number}</span>
+                <span class="display-tile-res">${d.modeWidth}×${d.modeHeight}</span>
+                ${d.primary ? `<span class="display-tile-primary">★</span>` : ''}
+            </button>`;
+    }).join('');
+
+    list.innerHTML = displays.map(d => {
+        const rows = [];
+        const row = (label, value, extraClass = '') => rows.push(
+            `<div class="display-row"><span class="display-row-label">${escapeHtml(label)}</span><span class="display-row-value ${extraClass}">${escapeHtml(value)}</span></div>`);
+
+        let resolution = `${d.modeWidth} × ${d.modeHeight}`;
+        if (d.maxWidth && (d.maxWidth !== d.modeWidth || d.maxHeight !== d.modeHeight)) {
+            resolution += ` (${t('dynamic.displays.maxRes').replace('{res}', `${d.maxWidth} × ${d.maxHeight}`)})`;
+        }
+        row(t('dynamic.displays.resolution'), resolution);
+
+        let refresh = d.refreshHz ? `${d.refreshHz} Hz` : '-';
+        if (d.maxRefreshHz && d.maxRefreshHz > d.refreshHz) {
+            refresh += ` (${t('dynamic.displays.maxRefresh').replace('{hz}', String(d.maxRefreshHz))})`;
+        }
+        row(t('dynamic.displays.refresh'), refresh);
+        row(t('dynamic.displays.scaling'), `${d.scalePercent}%`);
+        row(t('dynamic.displays.position'), `${d.bounds.x}, ${d.bounds.y}`);
+        row(t('dynamic.displays.workArea'), `${d.workArea.width} × ${d.workArea.height}`);
+        row(t('dynamic.displays.orientation'), displayOrientationText(d.orientation));
+        if (d.bitsPerPixel) row(t('dynamic.displays.colorDepth'), t('dynamic.displays.bits').replace('{n}', String(d.bitsPerPixel)));
+        if (d.gpu) row(t('dynamic.displays.gpu'), d.gpu);
+        row(t('dynamic.displays.device'), d.gdiName, 'is-mono');
+
+        const classes = ['display-card'];
+        if (d.number === selectedDisplayNumber) classes.push('is-selected');
+        return `
+            <div class="${classes.join(' ')}" id="display_${d.number}_card" title="${escapeHtml(d.id)}">
+                <div class="display-card-header" onclick="selectDisplay(${d.number})">
+                    <span class="display-card-number">${d.number}</span>
+                    <span class="display-card-name">${escapeHtml(d.name)}</span>
+                    ${d.primary ? `<span class="scope-chip display-primary-chip">${escapeHtml(t('dynamic.displays.primary'))}</span>` : ''}
+                </div>
+                <div class="display-rows">${rows.join('')}</div>
+            </div>`;
+    }).join('');
+}
+
+// The diagram is laid out from the panel's pixel width, so re-fit it when the dialog is resized.
+window.addEventListener('resize', () => {
+    if (displaysData && document.querySelector('.panel-content[data-panel="displays"].active')) renderDisplays();
+});
+
 // ---- In-dialog updater (About tab) ----
 // Each step is user-initiated: check, then download, then install behind a confirmation. The backend keeps the found/staged release between calls.
 let updaterVersion = null;
@@ -6048,21 +6183,7 @@ async function scanEveAccounts() {
     setAccountScanSummary(t('dynamic.accounts.scanning'));
 
     try {
-        const result = JSON.parse(await webui.call('scanEveAccounts'));
-        const scanned = (result.characters || []).filter(c => EVE_ID_PATTERN.test(String(c.id)));
-        accountScanById = new Map(scanned.map(c => [c.id, c]));
-
-        scanned.forEach(sc => {
-            let link = findAccountCharacter(sc.id);
-            if (!link) {
-                link = { id: sc.id, name: null, accountId: null, lastSeen: null };
-                accountsData.characters.push(link);
-            }
-            if (sc.name) link.name = sc.name;
-            if (!link.lastSeen || sc.lastSeen > link.lastSeen) link.lastSeen = sc.lastSeen;
-        });
-        await saveAccountsData();
-
+        const scanned = await fetchEveCharacterScan();
         const accountCount = new Set(scanned.map(c => c.suggestedUserId).filter(Boolean)).size;
         setAccountScanSummary(t('status.accountsScanned')
             .replace('{n}', String(scanned.length))
@@ -6075,6 +6196,27 @@ async function scanEveAccounts() {
         if (btn) btn.disabled = false;
         renderAccountsPanel();
     }
+}
+
+// Shared by Account Config and the Characters tab's "Populate from EVE Settings": runs the backend scan, folds the result into accounts.json (so resolved names are cached for both), and returns the scanned characters.
+async function fetchEveCharacterScan() {
+    const result = JSON.parse(await webui.call('scanEveAccounts'));
+    const scanned = (result.characters || []).filter(c => EVE_ID_PATTERN.test(String(c.id)));
+    accountScanById = new Map(scanned.map(c => [c.id, c]));
+    accountScanStarted = true;
+
+    scanned.forEach(sc => {
+        let link = findAccountCharacter(sc.id);
+        if (!link) {
+            link = { id: sc.id, name: null, accountId: null, lastSeen: null };
+            accountsData.characters.push(link);
+        }
+        if (sc.name) link.name = sc.name;
+        if (!link.lastSeen || sc.lastSeen > link.lastSeen) link.lastSeen = sc.lastSeen;
+    });
+    await saveAccountsData();
+    renderAccountsPanel();
+    return scanned;
 }
 
 function setAccountScanSummary(text) {
@@ -6508,6 +6650,112 @@ async function populateCharactersFromClients() {
     } finally {
         if (btn) { btn.disabled = false; btn.textContent = t('common.populateFromClients'); }
     }
+}
+
+// Like populateCharactersFromClients(), but sourced from every character that has logged in on this PC (Account Config's EVE settings scan), and asks which to add first.
+async function populateCharactersFromEveSettings() {
+    if (!currentConfig || typeof webui === 'undefined') return;
+    const btn = document.getElementById('populateFromEveSettingsBtn');
+    if (btn) { btn.disabled = true; btn.textContent = t('status.scanningLabel'); }
+
+    try {
+        const scanned = await fetchEveCharacterScan();
+        saveCharacters();
+        const existing = new Set((currentConfig.characters || []).map(c => (c.name || '').trim().toLowerCase()));
+        const candidates = scanned
+            .filter(c => !c.name || !existing.has(c.name.trim().toLowerCase()))
+            .sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+
+        if (scanned.length === 0) {
+            showStatus(t('dynamic.accounts.noCharacters'), 'error');
+            return;
+        }
+        if (!candidates.some(c => c.name)) {
+            showStatus(t('status.allEveSettingsCharactersInList'), 'info');
+            return;
+        }
+
+        const chosen = await showEveSettingsCharactersModal(candidates);
+        if (!chosen || chosen.length === 0) return;
+
+        if (!currentConfig.characters) currentConfig.characters = [];
+        chosen.forEach(name => {
+            currentConfig.characters.push({
+                name,
+                position: null, // Unset -> backend auto-arranges via layoutMode instead of pinning to (0,0)
+                borderColors: null,
+                thumbnailSize: null,
+                displayName: null,
+                hotkey: null
+            });
+        });
+        populateCharacters();
+        markAsChanged();
+        showStatus(t('status.addedCharactersFromEveSettings').replace('{n}', chosen.length), 'success');
+    } catch (error) {
+        logError('Failed to populate characters from EVE settings:', error);
+        showStatus(t('status.accountsScanFailed') + error.message, 'error');
+    } finally {
+        if (btn) { btn.disabled = false; btn.textContent = t('button.populate-from-eve-settings.label'); }
+    }
+}
+
+function setEveSettingsCharacterChecks(checked) {
+    document.querySelectorAll('#eveSettingsCharactersList input[type="checkbox"]:not(:disabled)').forEach(cb => { cb.checked = checked; });
+    updateEveSettingsConfirmLabel();
+}
+
+function updateEveSettingsConfirmLabel() {
+    const btn = document.getElementById('eve-settings-characters-confirm');
+    if (!btn) return;
+    const n = document.querySelectorAll('#eveSettingsCharactersList input[type="checkbox"]:checked').length;
+    btn.textContent = t('button.add-selected-characters.label').replace('{n}', String(n));
+    btn.disabled = n === 0;
+}
+
+// Resolves to the chosen character names, or null if cancelled. Characters whose name couldn't be resolved are listed but can't be ticked, since profile entries are keyed by name.
+function showEveSettingsCharactersModal(candidates) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('eve-settings-characters-modal');
+        const list = document.getElementById('eveSettingsCharactersList');
+        const confirmBtn = document.getElementById('eve-settings-characters-confirm');
+        const cancelBtn = document.getElementById('eve-settings-characters-cancel');
+
+        list.innerHTML = candidates.map((c, i) => {
+            const account = findAccount(findAccountCharacter(c.id)?.accountId)?.name;
+            const meta = [];
+            if (c.lastSeen) meta.push(t('dynamic.accounts.lastLogin').replace('{date}', formatAccountTimestamp(c.lastSeen)));
+            if (account) meta.push(account);
+            if (!c.name) meta.push(t('dynamic.eveSettingsCharacters.unresolved'));
+            return `
+                <label class="eve-settings-character-item${c.name ? '' : ' is-disabled'}">
+                    <input type="checkbox" id="eveSettingsChar_${i}" data-untracked data-name="${escapeHtml(c.name || '')}" ${c.name ? 'checked' : 'disabled'} onchange="updateEveSettingsConfirmLabel()">
+                    <span class="label-body" aria-hidden="true"></span>
+                    <img class="character-portrait" src="https://images.evetech.net/characters/${c.id}/portrait?size=64" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                    <span class="eve-settings-character-text">
+                        <span class="eve-settings-character-name">${escapeHtml(c.name || `#${c.id}`)}</span>
+                        <span class="eve-settings-character-meta">${escapeHtml(meta.join(' · '))}</span>
+                    </span>
+                </label>`;
+        }).join('');
+        updateEveSettingsConfirmLabel();
+
+        document.body.appendChild(modal);
+        modal.classList.add('show');
+
+        const finish = (result) => {
+            modal.classList.remove('show');
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            resolve(result);
+        };
+        const onConfirm = () => finish(
+            [...list.querySelectorAll('input[type="checkbox"]:checked')].map(cb => cb.dataset.name).filter(Boolean)
+        );
+        const onCancel = () => finish(null);
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+    });
 }
 
 function confirmRemove(buttonId, removeCallback, confirmText = t('common.confirm')) {
