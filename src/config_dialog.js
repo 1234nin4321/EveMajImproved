@@ -1249,6 +1249,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     initDelegatedKeyboardActivation();
     initConfirmButtonWidthReservation();
     buildSectionNav();
+    restoreLayoutPreference();
 
     const ready = await waitForWebUI();
     if (ready) {
@@ -1340,19 +1341,24 @@ function switchTab(panelId) {
         contentPanel.scrollTop = 0;
     }
 
+    // Keyed on which sections the newly shown tab holds rather than its name, so the same hooks work in both the classic and the AI layout (which regroups sections into different tabs).
+    const shownPanel = document.querySelector(`.panel-content[data-panel="${panelId}"]`);
+    const shows = (id) => !!shownPanel?.querySelector(`#${id}`);
     // Both read as 0 via getBoundingClientRect while the panel is display:none - recompute now that it's visible.
-    if (panelId === 'thumbnails') refreshOverlayLayoutPreview();
-    if (panelId === 'hotkey-groups') {
+    if (shows('overlayLayoutStage')) refreshOverlayLayoutPreview();
+    if (shows('hotkeyGroupsList')) {
         alignDetailPanelNameLabel('hotkeyGroupsList');
         fitHotkeyGroupCharsList(selectedHotkeyGroupIndex);
     }
-    if (panelId === 'characters') alignDetailPanelNameLabel('charactersList');
-    if (panelId === 'improvements') {
-        // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
-        if (!accountScanStarted) scanEveAccounts();
+    if (shows('charactersList')) alignDetailPanelNameLabel('charactersList');
+    // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
+    if (shows('accountCharactersList') && !accountScanStarted) scanEveAccounts();
+    if (shows('accountKeyBindingsList')) {
         // Account names may have changed since the bindings were last drawn.
         saveAccountKeyBindings();
         populateAccountKeyBindings();
+    }
+    if (shows('displayDiagram')) {
         // The diagram needs the panel's real width, which only exists once it's visible.
         if (!displaysLoadStarted) loadDisplays();
         else renderDisplays();
@@ -1366,7 +1372,7 @@ function switchTab(panelId) {
 }
 
 // Tabs whose sections are too few/short to be worth a sidebar sub-list.
-const TABS_WITHOUT_SUBHEADERS = ['about', 'characters', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty'];
+const TABS_WITHOUT_SUBHEADERS = ['about', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty', 'updates', 'ai-groups'];
 
 // IDs/labels are derived from each section's h3[data-i18n] rather than hand-maintained, so they can't drift out of sync as sections are added/removed.
 function buildSectionNav() {
@@ -2022,7 +2028,7 @@ function onDisplayRegionAccountChange(accountId) {
 
 function goToAccountConfigFromRegions() {
     document.getElementById('display-regions-cancel')?.click();
-    goToImprovementElsewhere('improvements', 'accountCharactersList');
+    goToImprovementElsewhere('char-acc', 'accountCharactersList');
 }
 
 // Switches tab, then scrolls to and briefly highlights the element - used by the Improvements tab's links to features built into other tabs, and back from them.
@@ -5073,10 +5079,10 @@ function showUpdateAvailableModal(version, url, notes) {
         closeBtn.removeEventListener('click', handleClose);
         gotoBtn.removeEventListener('click', handleGoto);
     };
-    // Jumps to the Improvements tab's updater, which re-checks so this process's backend has the release to download.
+    // Jumps to the Updates tab, which re-checks so this process's backend has the release to download.
     const handleGoto = () => {
         handleClose();
-        goToImprovementElsewhere('improvements', 'update-status-text');
+        switchTab('updates');
         checkForUpdatesNow();
     };
 
@@ -5220,8 +5226,146 @@ function renderDisplays() {
 
 // The diagram is laid out from the panel's pixel width, so re-fit it when the dialog is resized.
 window.addEventListener('resize', () => {
-    if (displaysData && document.querySelector('.panel-content[data-panel="improvements"].active')) renderDisplays();
+    if (displaysData && document.getElementById('displayDiagram')?.offsetParent) renderDisplays();
 });
+
+// ---- AI Layout: an alternative, task-oriented arrangement of the very same sections ----
+// Switching moves each section element (never copies it) into the new tabs, leaving a placeholder comment where it came from, so every id, listener and save path keeps working; switching back puts each one exactly where it was. Sections not listed here (only the classic layout's "In Other Tabs" pointer) simply stay behind, hidden with the classic tabs.
+const AI_LAYOUT_TABS = [
+    { id: 'ai-home', glyph: '★', titleKey: 'tab.ai.home.title', sections: [
+        'tab.about.section.app-name.heading', 'tab.about.section.updates.heading',
+        'tab.about.section.preferences.heading', 'tab.behavior.section.startup.heading'] },
+    { id: 'ai-characters', glyph: '☰', titleKey: 'tab.ai.characters.title', sections: [
+        'tab.characters.section.per-character-configuration.heading', 'tab.char-acc.section.populate.heading',
+        'tab.accounts.section.characters.heading', 'tab.accounts.section.accounts.heading',
+        'tab.behavior.section.character-exclusion.heading'] },
+    { id: 'ai-layout', glyph: '▦', titleKey: 'tab.ai.layout.title', sections: [
+        'tab.thumbnails.section.display-mode.heading', 'tab.thumbnails.section.region-fit.heading',
+        'tab.thumbnails.section.not-logged-in-space.heading', 'tab.thumbnails.section.thumbnail-dimensions.heading',
+        'tab.thumbnails.section.snapping-system.heading', 'tab.thumbnails.section.monitor-auto-arrange.heading',
+        'tab.thumbnails.section.position-parameters.heading', 'tab.displays.section.displays.heading'] },
+    { id: 'ai-appearance', glyph: '◐', titleKey: 'tab.ai.appearance.title', sections: [
+        'tab.thumbnails.section.border-configuration.heading', 'tab.overlay-text.section.text-display-system.heading',
+        'tab.overlay-text.section.system-color-overrides.heading', 'tab.thumbnails.section.visibility.heading'] },
+    { id: 'ai-controls', glyph: '⌨', titleKey: 'tab.ai.controls.title', sections: [
+        'tab.hotkeys.section.hotkey-system.heading', 'tab.hotkeys.section.client-cycling.heading',
+        'tab.key-bindings.section.accounts.heading', 'tab.hotkeys.section.cycling.heading',
+        'tab.hotkeys.section.window-actions.heading', 'tab.hotkeys.section.profile-hotkeys.heading',
+        'tab.hotkeys.section.system.heading', 'tab.hotkeys.section.desktop-apps.heading',
+        'tab.behavior.section.interaction.heading'] },
+    { id: 'ai-groups', glyph: '◫', titleKey: 'tab.ai.groups.title', sections: [
+        'tab.hotkey-groups.section.groups.heading'] },
+    { id: 'ai-alerts', glyph: '✉', titleKey: 'tab.ai.alerts.title', sections: [
+        'tab.notifications.section.notification-system.heading', 'tab.notifications.section.event-type-configuration.heading',
+        'tab.notifications.section.text-to-speech.heading', 'tab.notifications.section.history-panel.heading',
+        'tab.notifications.section.travel-mode.heading', 'tab.chatlog.section.chatlog-monitoring.heading',
+        'tab.chatlog.section.polling-performance.heading'] },
+    { id: 'ai-clients', glyph: '⧉', titleKey: 'tab.ai.clients.title', sections: [
+        'tab.behavior.section.auto-minimize-all-clients.heading', 'tab.behavior.section.window-position.heading',
+        'tab.behavior.section.ultra-potato.heading'] },
+    { id: 'ai-overlays', glyph: '⚔', titleKey: 'tab.ai.overlays.title', advanced: true, sections: [
+        'tab.combat.section.combat-dps-overlay.heading', 'tab.mining.section.mining-rate-overlay.heading',
+        'tab.mining.section.alerts.heading', 'tab.mining.section.ore-prices.heading',
+        'tab.bounty.section.bounty-rate-overlay.heading', 'tab.resources.section.resource-usage-overlay.heading'] },
+    { id: 'ai-system', glyph: '⚙', titleKey: 'tab.ai.system.title', advanced: true, sections: [
+        'tab.general.section.logging.heading', 'tab.general.section.scanning.heading',
+        'tab.general.section.window-filters.heading'] },
+    { id: 'ai-about', glyph: 'ⓘ', titleKey: 'tab.ai.about.title', sections: [
+        'tab.about.section.credits.heading', 'tab.about.section.thanks.heading',
+        'tab.about.section.license.heading', 'tab.about.section.snake.heading'] },
+];
+const LAYOUT_STORAGE_KEY = 'eveMajLayout';
+let aiLayoutActive = false;
+
+function findSectionByHeading(i18nKey) {
+    return document.querySelector(`#content-panel .section h3[data-i18n="${i18nKey}"]`)?.closest('.section') || null;
+}
+
+function enableAiLayout() {
+    if (aiLayoutActive) return;
+    const sidebar = document.getElementById('tabs-sidebar');
+    const content = document.getElementById('content-panel');
+    if (!sidebar || !content) return;
+    const firstClassicTab = sidebar.querySelector('.tab-item');
+
+    for (const def of AI_LAYOUT_TABS) {
+        const tab = document.createElement('div');
+        tab.className = `tab-item ai-tab${def.advanced ? ' advanced-tab' : ''}`;
+        tab.dataset.tab = def.id;
+        tab.setAttribute('role', 'tab');
+        tab.setAttribute('tabindex', '0');
+        tab.innerHTML = `<span class="tab-glyph" aria-hidden="true">${def.glyph}</span><span data-i18n="${def.titleKey}">${escapeHtml(t(def.titleKey))}</span>`;
+        tab.addEventListener('click', () => switchTab(def.id));
+        tab.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                switchTab(def.id);
+            }
+        });
+        sidebar.insertBefore(tab, firstClassicTab);
+
+        const panel = document.createElement('div');
+        panel.className = `panel-content ai-panel${def.advanced ? ' advanced-tab-panel' : ''}`;
+        panel.dataset.panel = def.id;
+        for (const key of def.sections) {
+            const section = findSectionByHeading(key);
+            if (!section) {
+                logWarn(`AI layout: no section with heading ${key}`);
+                continue;
+            }
+            const placeholder = document.createComment(`ai-layout:${key}`);
+            section.parentNode.insertBefore(placeholder, section);
+            section._aiPlaceholder = placeholder;
+            panel.appendChild(section);
+        }
+        content.appendChild(panel);
+    }
+
+    aiLayoutActive = true;
+    document.body.classList.add('ai-layout');
+    buildSectionNav();
+    refreshLayoutToggle();
+    switchTab('ai-home');
+}
+
+function disableAiLayout() {
+    if (!aiLayoutActive) return;
+    document.querySelectorAll('.ai-panel .section').forEach(section => {
+        if (!section._aiPlaceholder) return;
+        section._aiPlaceholder.replaceWith(section);
+        section._aiPlaceholder = null;
+    });
+    document.querySelectorAll('.ai-panel, .ai-tab').forEach(el => el.remove());
+    aiLayoutActive = false;
+    document.body.classList.remove('ai-layout');
+    buildSectionNav();
+    refreshLayoutToggle();
+    switchTab('about');
+}
+
+function toggleAiLayout() {
+    if (aiLayoutActive) disableAiLayout();
+    else enableAiLayout();
+    // A per-PC convenience only; the page works the same if storage is unavailable.
+    try { localStorage.setItem(LAYOUT_STORAGE_KEY, aiLayoutActive ? 'ai' : 'classic'); } catch { /* ignore */ }
+}
+
+function refreshLayoutToggle() {
+    const btn = document.getElementById('layoutToggleBtn');
+    const hint = document.getElementById('layoutToggleHint');
+    // data-i18n is kept in step too, so a later language switch (applyTranslations) keeps the right label.
+    const btnKey = aiLayoutActive ? 'button.layout-classic.label' : 'button.layout-ai.label';
+    const hintKey = aiLayoutActive ? 'misc.layout-classic-hint' : 'misc.layout-ai-hint';
+    if (btn) { btn.dataset.i18n = btnKey; btn.textContent = t(btnKey); }
+    if (hint) { hint.dataset.i18n = hintKey; hint.textContent = t(hintKey); }
+}
+
+function restoreLayoutPreference() {
+    let saved = null;
+    try { saved = localStorage.getItem(LAYOUT_STORAGE_KEY); } catch { /* ignore */ }
+    if (saved === 'ai') enableAiLayout();
+    else refreshLayoutToggle();
+}
 
 // ---- Key Binding tab: hotkeys bound to Account Config accounts (config.accountHotkeys; handled by hotkeys.zig's activateAccount) ----
 function currentAccountHotkeys() {
@@ -5243,7 +5387,7 @@ function populateAccountKeyBindings() {
     if (bindings.length === 0) {
         container.innerHTML = accounts.length === 0
             ? `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.noAccounts'))}</p>
-               <button type="button" class="button-outline" onclick="goToImprovementElsewhere('improvements', 'accountCharactersList')">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`
+               <button type="button" class="button-outline" onclick="goToImprovementElsewhere('char-acc', 'accountCharactersList')">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`
             : `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.empty'))}</p>`;
         updateHotkeyConflictHighlights();
         return;
@@ -8158,7 +8302,7 @@ function toggleAdvancedMode() {
     if (!enabled) {
         const activePanel = document.querySelector('.panel-content.active');
         if (activePanel && activePanel.classList.contains('advanced-tab-panel')) {
-            switchTab('about');
+            switchTab(aiLayoutActive ? 'ai-home' : 'about');
         }
     }
 }
@@ -9931,6 +10075,9 @@ function filterSettings(query) {
         if (panel.classList.contains('advanced-tab-panel') && !document.body.classList.contains('advanced-mode')) {
             return;
         }
+
+        // Only the tabs of the layout in use (classic or AI) can show results; the other layout's panels are hidden.
+        if (panel.classList.contains('ai-panel') !== aiLayoutActive) return;
 
         const tab = document.querySelector(`.tab-item[data-tab="${panelTab}"]`);
         const sections = panel.querySelectorAll('.section');

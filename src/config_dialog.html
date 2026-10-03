@@ -45,14 +45,17 @@
                 <div class="tab-item" data-tab="improvements">
                     <span class="tab-glyph" aria-hidden="true">✦</span><span data-i18n="tab.improvements.title">improvements</span>
                 </div>
+                <div class="tab-item" data-tab="updates">
+                    <span class="tab-glyph" aria-hidden="true">⟳</span><span data-i18n="tab.updates.title">updates</span>
+                </div>
                 <div class="tab-item advanced-tab" data-tab="general">
                     <span class="tab-glyph" aria-hidden="true">⚙</span><span data-i18n="tab.general.title">general</span>
                 </div>
                 <div class="tab-item" data-tab="thumbnails">
                     <span class="tab-glyph" aria-hidden="true">▭</span><span data-i18n="tab.thumbnails.title">thumbnails</span>
                 </div>
-                <div class="tab-item" data-tab="characters">
-                    <span class="tab-glyph" aria-hidden="true">☰</span><span data-i18n="tab.characters.title">characters</span>
+                <div class="tab-item" data-tab="char-acc">
+                    <span class="tab-glyph" aria-hidden="true">◎</span><span data-i18n="tab.char-acc.title">char/acc management</span>
                 </div>
                 <div class="tab-item" data-tab="behavior">
                     <span class="tab-glyph" aria-hidden="true">✥</span><span data-i18n="tab.behavior.title">behavior</span>
@@ -106,6 +109,10 @@
                         <div style="margin: 12px 0;">
                             <p class="hint"><strong data-i18n="misc.version-label">Version:</strong> <span id="app-version">0.0.2</span></p>
                             <p class="hint"><strong data-i18n="misc.repository-label">Repository:</strong> <a href="https://github.com/1234nin4321/EveMajImproved" onclick="return openExternalLink(event)" class="external-link">github.com/1234nin4321/EveMajImproved</a></p>
+                        </div>
+                        <div class="layout-toggle-row">
+                            <button type="button" id="layoutToggleBtn" class="button-primary" onclick="toggleAiLayout()" data-i18n="button.layout-ai.label">✦ AI Layout</button>
+                            <span id="layoutToggleHint" class="layout-toggle-hint" data-i18n="misc.layout-ai-hint">Try a layout that groups every setting by task. Switch back any time - only where things are changes.</span>
                         </div>
                     </div>
 
@@ -1003,8 +1010,8 @@
                     </div>
                 </div>
 
-                <div class="panel-content" data-panel="characters">
-                    <div class="section">
+                <div class="panel-content" data-panel="char-acc">
+                    <div class="section character-list-section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.characters.section.per-character-configuration.heading">Character List</h3>
                             <div class="section-heading-actions">
@@ -1027,13 +1034,22 @@
                             <button type="button" onclick="addCharacter()" data-i18n="button.add-character.label">+ Add Character</button>
                             <button type="button" id="populateCharactersBtn" onclick="populateCharactersFromClients()" data-i18n="common.populateFromClients">↻ Populate from Open Clients</button>
                         </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.char-acc.section.populate.heading">Populate Profile from EVE Settings</h3>
+                            <div class="section-heading-actions">
+                                <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
+                        </div>
+                        <p class="hint" data-i18n="tab.char-acc.section.populate.hint">Adds characters that have logged in on this PC to the current profile's Character List - you choose which ones. Nothing is saved until you click Save.</p>
                         <div class="button-row">
                             <button type="button" id="populateFromEveSettingsBtn" onclick="populateCharactersFromEveSettings()" data-i18n="button.populate-from-eve-settings.label">⇩ Populate from EVE Settings</button>
                         </div>
                     </div>
-                </div>
 
-                <div class="panel-content" data-panel="improvements">
                     <div class="section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.accounts.section.characters.heading">EVE Characters</h3>
@@ -1078,7 +1094,9 @@
                             <button type="button" onclick="addAccount()" data-i18n="button.add-account.label">+ Add Account</button>
                         </div>
                     </div>
+                </div>
 
+                <div class="panel-content" data-panel="improvements">
                     <div class="section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.displays.section.displays.heading">Connected Displays</h3>
@@ -1116,6 +1134,22 @@
                         </div>
                     </div>
 
+                    <div class="section improvements-elsewhere">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.improvements.section.elsewhere.heading">In Other Tabs</h3>
+                        </div>
+                        <p class="improvements-intro" data-i18n="tab.improvements.section.elsewhere.hint">These improvements are built into existing settings, so they live next to the controls they extend.</p>
+                        <div class="improvements-link-row">
+                            <div class="improvements-link-text">
+                                <span class="improvements-link-title" data-i18n="tab.improvements.link.regions.title">Thumbnail regions per monitor</span>
+                                <span class="improvements-link-hint" data-i18n="tab.improvements.link.regions.hint">Full Display or drawn regions, one per monitor, each split into a grid by character, client or account, with Fit to Grid. Thumbnails › Thumbnail Space.</span>
+                            </div>
+                            <button type="button" onclick="goToImprovementElsewhere('thumbnails', 'thumbnailRegionsList')" data-i18n="button.improvements-go.label">Go</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-content" data-panel="updates">
                     <div class="section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.about.section.updates.heading">Updates</h3>
@@ -1132,27 +1166,6 @@
                             <button type="button" id="checkUpdateBtn" onclick="checkForUpdatesNow()" data-i18n="button.check-update.label">↻ Check for Updates</button>
                             <button type="button" id="downloadUpdateBtn" onclick="downloadUpdateNow()" style="display: none;" data-i18n="button.download-update.label">⇩ Download Update</button>
                             <button type="button" id="installUpdateBtn" class="button-primary" onclick="confirmInstallUpdate()" style="display: none;" data-i18n="button.install-update.label">Install Update</button>
-                        </div>
-                    </div>
-
-                    <div class="section improvements-elsewhere">
-                        <div class="section-heading">
-                            <h3 data-i18n="tab.improvements.section.elsewhere.heading">In Other Tabs</h3>
-                        </div>
-                        <p class="improvements-intro" data-i18n="tab.improvements.section.elsewhere.hint">These improvements are built into existing settings, so they live next to the controls they extend.</p>
-                        <div class="improvements-link-row">
-                            <div class="improvements-link-text">
-                                <span class="improvements-link-title" data-i18n="tab.improvements.link.regions.title">Thumbnail regions per monitor</span>
-                                <span class="improvements-link-hint" data-i18n="tab.improvements.link.regions.hint">Full Display or drawn regions, one per monitor, each split into a grid by character, client or account, with Fit to Grid. Thumbnails › Thumbnail Space.</span>
-                            </div>
-                            <button type="button" onclick="goToImprovementElsewhere('thumbnails', 'thumbnailRegionsList')" data-i18n="button.improvements-go.label">Go</button>
-                        </div>
-                        <div class="improvements-link-row">
-                            <div class="improvements-link-text">
-                                <span class="improvements-link-title" data-i18n="tab.improvements.link.populate.title">Populate from EVE Settings</span>
-                                <span class="improvements-link-hint" data-i18n="tab.improvements.link.populate.hint">Add every character that has logged in on this PC to the profile, picking which ones. Characters › Character List.</span>
-                            </div>
-                            <button type="button" onclick="goToImprovementElsewhere('characters', 'populateFromEveSettingsBtn')" data-i18n="button.improvements-go.label">Go</button>
                         </div>
                     </div>
                 </div>

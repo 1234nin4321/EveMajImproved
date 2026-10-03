@@ -2374,7 +2374,6 @@ input[type="range"]::-moz-range-thumb {
    "explicit" height, so percentage heights on its descendants won't resolve
    against it. Each panel holds the one section, which is what makes this work
    where a scrolling column of sections (the hotkeys panel) couldn't. */
-.panel-content[data-panel="characters"].active,
 .panel-content[data-panel="hotkey-groups"].active {
     display: flex;
     flex-direction: column;
@@ -2382,7 +2381,6 @@ input[type="range"]::-moz-range-thumb {
     min-height: 0;
 }
 
-.panel-content[data-panel="characters"] .section,
 .panel-content[data-panel="hotkey-groups"] .section {
     flex: 1;
     min-height: 0;
@@ -3804,4 +3802,50 @@ button.confirm-delete:hover {
     color: var(--color-accent);
     font-weight: var(--fw-semibold);
     font-style: normal;
+}
+
+/* Char/Acc Management: the Character List shares a scrolling tab with other sections, so it gets a fixed height (instead of filling the window like the old Characters tab) for its roster and detail panel to still scroll independently. */
+.section.character-list-section {
+    display: flex;
+    flex-direction: column;
+    height: min(70vh, 640px);
+    min-height: 360px;
+}
+
+/* AI Layout: classic tabs and their (now mostly emptied) panels are hidden while the AI tabs are shown. */
+body.ai-layout .tab-item:not(.ai-tab),
+body.ai-layout .panel-content:not(.ai-panel) {
+    display: none !important;
+}
+
+/* Hotkey Groups keeps its own full-height tab in the AI layout too (see the classic hotkey-groups rules). */
+.panel-content[data-panel="ai-groups"].active {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+
+.panel-content[data-panel="ai-groups"] .section {
+    flex: 1;
+    min-height: 0;
+    margin-bottom: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.layout-toggle-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+}
+
+.layout-toggle-row > button {
+    flex: none;
+}
+
+.layout-toggle-hint {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
 }
