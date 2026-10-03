@@ -996,6 +996,7 @@ function buildThumbnailPreviewPatch(includePositions = false) {
             regionWidth: getNullableFieldValue('regionWidth'),
             regionHeight: getNullableFieldValue('regionHeight'),
             displayGrid: currentDisplayGrid(),
+            displayLayouts: currentDisplayLayouts(),
             notLoggedInSpaceEnabled: getFieldValue('notLoggedInSpaceEnabled'),
             notLoggedInSpaceSpacing: getFieldValue('notLoggedInSpaceSpacing'),
             notLoggedInSpaceLimitToThumbnailSize: getFieldValue('notLoggedInSpaceLimitToThumbnailSize'),
@@ -1568,15 +1569,41 @@ function clearRegion(fieldIds) {
     scheduleThumbnailPreview();
 }
 
-// ---- Display Regions (Thumbnail Space split into an NxN grid; see display_grid.zig) ----
+// ---- Display Regions: one grid per display (see display_grid.zig) ----
 const DISPLAY_REGION_KINDS = ['Empty', 'EveryoneElse', 'Custom', 'Client', 'Account'];
+const DISPLAY_REGIONS_MAX_DIM = 8;
 let displayRegionsDisplays = null;
+// Per-display drafts while the dialog is open, keyed by display id; displayRegionsDraft is the one being edited.
+let displayRegionsDrafts = new Map();
 let displayRegionsDraft = null;
+// Saved layouts for displays not connected right now - carried through Apply untouched.
+let displayRegionsDetached = [];
 let displayRegionsSelectedCell = 0;
+// True while the Custom split is chosen, so its inputs stay visible even when the numbers happen to match a preset.
+let displayRegionsCustomMode = false;
+
+// Columns x rows a saved grid uses: explicit columns/rows win over the legacy square `size`.
+function displayGridDims(grid) {
+    if (grid?.columns > 0 && grid?.rows > 0) return { columns: grid.columns, rows: grid.rows };
+    const n = grid?.size || 0;
+    return { columns: n, rows: n };
+}
 
 function currentDisplayGrid() {
     const grid = currentConfig?.display?.displayGrid;
-    return grid && Number.isInteger(grid.size) ? grid : { size: 0, slots: [] };
+    return grid && typeof grid === 'object' ? grid : { size: 0, columns: 0, rows: 0, slots: [] };
+}
+
+function currentDisplayLayouts() {
+    const layouts = currentConfig?.display?.displayLayouts;
+    return Array.isArray(layouts) ? layouts : [];
+}
+
+function activeDisplayLayouts() {
+    return currentDisplayLayouts().filter(l => {
+        const d = displayGridDims(l.grid);
+        return d.columns && d.rows && l.width > 0 && l.height > 0;
+    });
 }
 
 // The display the Thumbnail Space region exactly covers (full bounds or work area), if any.
@@ -1599,27 +1626,42 @@ async function fetchDisplaysForRegions(force = false) {
     return displayRegionsDisplays;
 }
 
-function displayGridSummary(grid) {
-    if (!grid.size) return t('dynamic.displayRegions.summaryOff');
-    const cells = grid.size * grid.size;
-    const used = (grid.slots || []).slice(0, cells).filter(s => s && s.kind && s.kind !== 'Empty').length;
-    return t('dynamic.displayRegions.summary')
-        .replaceAll('{n}', String(grid.size))
-        .replace('{used}', String(used))
-        .replace('{cells}', String(cells));
+function gridDimsLabel(grid) {
+    const { columns, rows } = displayGridDims(grid);
+    return `${columns}×${rows}`;
 }
 
-// Shown once the region is a full display (or a grid is already set up, so it can't get stranded if displays change).
+function displayGridSummary(grid) {
+    const { columns, rows } = displayGridDims(grid);
+    if (!columns || !rows) return t('dynamic.displayRegions.summaryOff');
+    const cells = columns * rows;
+    const used = (grid.slots || []).slice(0, cells).filter(s => s && s.kind && s.kind !== 'Empty').length;
+    const summary = t('dynamic.displayRegions.summary')
+        .replace('{cols}', String(columns))
+        .replace('{rows}', String(rows))
+        .replace('{used}', String(used))
+        .replace('{cells}', String(cells));
+    return grid.fitToGrid ? `${summary} · ${t('field.displayRegionsFitToGrid.label')}` : summary;
+}
+
+// Lives inside Region Fit's options, so it's available whenever Region Fit is on; the summary names each set-up display.
 async function updateDisplayRegionsBlock() {
     const block = document.getElementById('displayRegionsBlock');
     if (!block) return;
-    const grid = currentDisplayGrid();
-    const hasRegion = !!currentRegionValues(REGION_FIELD_IDS);
-    const displays = hasRegion ? await fetchDisplaysForRegions() : null;
-    const match = displayMatchingRegion(displays);
-    block.style.display = hasRegion && (match || grid.size) ? '' : 'none';
+    block.style.display = '';
     const summary = document.getElementById('displayRegionsSummary');
-    if (summary) summary.textContent = displayGridSummary(grid);
+    if (!summary) return;
+    const layouts = activeDisplayLayouts();
+    if (layouts.length) {
+        const displays = await fetchDisplaysForRegions();
+        summary.textContent = layouts.map(l => {
+            const d = displays?.find(x => x.id === l.displayId);
+            const label = d ? t('dynamic.displayRegions.displayLabel').replace('{n}', String(d.number)) : t('dynamic.displayRegions.disconnected');
+            return `${label}: ${gridDimsLabel(l.grid)}`;
+        }).join(' · ');
+        return;
+    }
+    summary.textContent = displayGridSummary(currentDisplayGrid());
 }
 
 function displayRegionCharacterNames() {
@@ -1640,17 +1682,91 @@ function normalizeDisplayRegionSlot(slot) {
     };
 }
 
-function setDisplayRegionsSize(size) {
+function newDisplayRegionsDraft(display, grid, useWorkArea) {
+    const dims = displayGridDims(grid);
+    return {
+        display,
+        useWorkArea: useWorkArea !== false,
+        columns: dims.columns,
+        rows: dims.rows,
+        fitToGrid: !!grid?.fitToGrid,
+        slots: (grid?.slots || []).map(normalizeDisplayRegionSlot),
+    };
+}
+
+// The area this draft's grid splits: the display's work area or full bounds.
+function displayRegionsDraftRect(draft) {
+    const r = draft.useWorkArea ? draft.display.workArea : draft.display.bounds;
+    return [r.x, r.y, r.width, r.height];
+}
+
+function clampDisplayRegionsDim(value) {
+    const n = Math.round(Number(value));
+    return Number.isFinite(n) ? Math.min(Math.max(n, 1), DISPLAY_REGIONS_MAX_DIM) : 1;
+}
+
+// Cells keep their settings by row-major index, so growing a grid keeps the existing cells and shrinking only hides the trailing ones until Apply.
+function setDisplayRegionsDims(columns, rows) {
     const draft = displayRegionsDraft;
-    const cells = size * size;
-    const slots = draft.slots.slice(0, Math.max(cells, draft.slots.length));
+    const wasOff = !draft.columns || !draft.rows;
+    const cells = columns * rows;
+    const slots = draft.slots.slice();
     while (slots.length < cells) slots.push({ kind: 'Empty', account: null, characters: [] });
-    // A fresh grid starts with a catch-all, so nothing disappears the moment it's switched on.
-    if (!draft.size && size && slots.slice(0, cells).every(s => s.kind === 'Empty')) slots[0] = { kind: 'EveryoneElse', account: null, characters: [] };
-    draft.size = size;
+    // A fresh grid starts with a catch-all, so nothing disappears the moment it's switched on - unless another display already has one.
+    const otherCatchAll = [...displayRegionsDrafts.values()].some(d => d !== draft && d.columns && d.rows && d.slots.slice(0, d.columns * d.rows).some(s => s.kind === 'EveryoneElse'));
+    if (wasOff && cells && !otherCatchAll && slots.slice(0, cells).every(s => s.kind === 'Empty')) slots[0] = { kind: 'EveryoneElse', account: null, characters: [] };
+    draft.columns = columns;
+    draft.rows = rows;
     draft.slots = slots;
     if (displayRegionsSelectedCell >= cells) displayRegionsSelectedCell = 0;
     renderDisplayRegionsModal();
+}
+
+function setDisplayRegionsSize(size) {
+    displayRegionsCustomMode = false;
+    setDisplayRegionsDims(size, size);
+}
+
+function chooseCustomDisplayRegionsSplit() {
+    displayRegionsCustomMode = true;
+    const draft = displayRegionsDraft;
+    if (draft.columns && draft.rows) renderDisplayRegionsModal();
+    else setDisplayRegionsDims(2, 2);
+    document.getElementById('displayRegionsColumns')?.focus();
+}
+
+function onDisplayRegionsCustomInput() {
+    const columns = clampDisplayRegionsDim(document.getElementById('displayRegionsColumns')?.value);
+    const rows = clampDisplayRegionsDim(document.getElementById('displayRegionsRows')?.value);
+    setDisplayRegionsDims(columns, rows);
+}
+
+function selectDisplayRegionsDisplay(number) {
+    const draft = [...displayRegionsDrafts.values()].find(d => d.display.number === number);
+    if (!draft || draft === displayRegionsDraft) return;
+    displayRegionsDraft = draft;
+    displayRegionsSelectedCell = 0;
+    displayRegionsCustomMode = !!draft.columns && !(draft.columns === draft.rows && draft.columns <= 4);
+    renderDisplayRegionsModal();
+}
+
+// Mirrors display_grid.cellRect: the area minus the spacing gaps, split evenly.
+function displayRegionCellSize(draft) {
+    if (!draft.columns || !draft.rows) return null;
+    const rect = displayRegionsDraftRect(draft);
+    const spacing = Number(getFieldValue('spacing')) || 0;
+    return {
+        width: Math.floor((rect[2] - spacing * (draft.columns - 1)) / draft.columns),
+        height: Math.floor((rect[3] - spacing * (draft.rows - 1)) / draft.rows),
+    };
+}
+
+function displayRegionsFitHintText(draft) {
+    const size = displayRegionCellSize(draft);
+    if (!size) return t('dynamic.displayRegions.fitHintOff');
+    return (draft.fitToGrid ? t('dynamic.displayRegions.fitHintOn') : t('dynamic.displayRegions.fitHintAuto'))
+        .replace('{w}', String(size.width))
+        .replace('{h}', String(size.height));
 }
 
 function selectDisplayRegionCell(index) {
@@ -1673,26 +1789,84 @@ function displayRegionCellLabel(slot) {
     }
 }
 
+function renderDisplayRegionsDisplayPicker() {
+    const container = document.getElementById('displayRegionsDisplayDiagram');
+    if (!container) return;
+    const displays = [...displayRegionsDrafts.values()].map(d => d.display);
+    const xs = displays.map(d => d.bounds.x), ys = displays.map(d => d.bounds.y);
+    const rs = displays.map(d => d.bounds.x + d.bounds.width), bs = displays.map(d => d.bounds.y + d.bounds.height);
+    const desktop = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...rs) - Math.min(...xs), height: Math.max(...bs) - Math.min(...ys) };
+    renderDisplayDiagram(container, { displays, desktop }, displayRegionsDraft.display.number, 'selectDisplayRegionsDisplay', 130);
+    // Badge every display that has a grid, so it's clear which ones are set up.
+    for (const draft of displayRegionsDrafts.values()) {
+        if (!draft.columns || !draft.rows) continue;
+        const tile = container.querySelector(`[data-display-number="${draft.display.number}"]`);
+        if (!tile) continue;
+        tile.classList.add('has-layout');
+        const badge = document.createElement('span');
+        badge.className = 'display-tile-layout';
+        badge.textContent = `${draft.columns}×${draft.rows}`;
+        tile.appendChild(badge);
+    }
+}
+
 function renderDisplayRegionsModal() {
     const draft = displayRegionsDraft;
+    if (!draft) return;
+    renderDisplayRegionsDisplayPicker();
+
+    const rect = displayRegionsDraftRect(draft);
+    const subtitle = document.getElementById('displayRegionsSubtitle');
+    if (subtitle) {
+        subtitle.textContent = t('dynamic.displayRegions.subtitle')
+            .replace('{n}', String(draft.display.number)).replace('{name}', draft.display.name)
+            .replace('{w}', String(rect[2])).replace('{h}', String(rect[3]));
+    }
+    const workBox = document.getElementById('displayRegionsUseWorkArea');
+    if (workBox) workBox.checked = draft.useWorkArea;
+
+    const isOff = !draft.columns || !draft.rows;
+    const isPreset = !displayRegionsCustomMode && draft.columns === draft.rows && draft.columns <= 4;
     document.querySelectorAll('#displayRegionsSize button[data-size]').forEach(btn => {
-        btn.classList.toggle('is-selected', Number(btn.dataset.size) === draft.size);
+        const size = btn.dataset.size;
+        const selected = size === 'custom'
+            ? !isOff && !isPreset
+            : (isOff ? size === '0' : isPreset && Number(size) === draft.columns);
+        btn.classList.toggle('is-selected', selected);
     });
+    const customInputs = document.getElementById('displayRegionsCustomInputs');
+    if (customInputs) customInputs.style.display = !isOff && !isPreset ? '' : 'none';
+    const colsInput = document.getElementById('displayRegionsColumns');
+    const rowsInput = document.getElementById('displayRegionsRows');
+    // Not while typing in them, or a half-typed value would be overwritten under the cursor.
+    if (colsInput && document.activeElement !== colsInput) colsInput.value = draft.columns || '';
+    if (rowsInput && document.activeElement !== rowsInput) rowsInput.value = draft.rows || '';
+
+    const fitBox = document.getElementById('displayRegionsFitToGrid');
+    if (fitBox) {
+        fitBox.checked = !!draft.fitToGrid;
+        fitBox.disabled = isOff;
+    }
+    const fitHint = document.getElementById('displayRegionsFitHint');
+    if (fitHint) fitHint.textContent = displayRegionsFitHintText(draft);
 
     const gridEl = document.getElementById('displayRegionsGrid');
     const editor = document.getElementById('displayRegionsEditor');
-    if (!draft.size) {
+    if (isOff) {
         gridEl.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.displayRegions.offHint'))}</p>`;
         gridEl.style.gridTemplateColumns = '';
+        gridEl.style.gridTemplateRows = '';
         gridEl.style.aspectRatio = '';
+        gridEl.classList.remove('is-dense');
         editor.innerHTML = '';
         return;
     }
 
-    const region = currentRegionValues(REGION_FIELD_IDS);
-    gridEl.style.gridTemplateColumns = `repeat(${draft.size}, 1fr)`;
-    gridEl.style.aspectRatio = region ? `${region[2]} / ${region[3]}` : '16 / 9';
-    const cells = draft.size * draft.size;
+    gridEl.style.gridTemplateColumns = `repeat(${draft.columns}, 1fr)`;
+    gridEl.style.gridTemplateRows = `repeat(${draft.rows}, 1fr)`;
+    gridEl.style.aspectRatio = `${rect[2]} / ${rect[3]}`;
+    gridEl.classList.toggle('is-dense', draft.columns * draft.rows > 16);
+    const cells = draft.columns * draft.rows;
     gridEl.innerHTML = draft.slots.slice(0, cells).map((slot, i) => `
         <button type="button" class="display-region-cell kind-${slot.kind}${i === displayRegionsSelectedCell ? ' is-selected' : ''}" onclick="selectDisplayRegionCell(${i})">
             <span class="display-region-cell-number">${i + 1}</span>
@@ -1782,45 +1956,105 @@ function goToAccountConfigFromRegions() {
     switchTab('accounts');
 }
 
-async function openDisplayRegionsModal() {
-    const grid = currentDisplayGrid();
-    displayRegionsDraft = {
-        size: grid.size || 0,
-        slots: (grid.slots || []).map(normalizeDisplayRegionSlot),
-    };
-    displayRegionsSelectedCell = 0;
-    if (displayRegionsDraft.size) setDisplayRegionsSize(displayRegionsDraft.size);
+// One draft per connected display, seeded from the saved per-display layouts - or, the first time, from a v1.3.0 single grid on whichever display the Thumbnail Space covers.
+function buildDisplayRegionsDrafts(displays) {
+    displayRegionsDrafts = new Map();
+    const layouts = currentDisplayLayouts();
+    displayRegionsDetached = layouts.filter(l => !displays.some(d => d.id === l.displayId));
+    for (const display of displays) {
+        const layout = layouts.find(l => l.displayId === display.id);
+        displayRegionsDrafts.set(display.id, newDisplayRegionsDraft(display, layout?.grid, layout ? layout.useWorkArea : true));
+    }
+    const legacy = currentDisplayGrid();
+    const legacyDims = displayGridDims(legacy);
+    if (!layouts.length && legacyDims.columns && legacyDims.rows) {
+        const match = displayMatchingRegion(displays);
+        if (match) {
+            const r = currentRegionValues(REGION_FIELD_IDS);
+            const onWorkArea = r && match.workArea.x === r[0] && match.workArea.y === r[1] && match.workArea.width === r[2] && match.workArea.height === r[3];
+            displayRegionsDrafts.set(match.id, newDisplayRegionsDraft(match, legacy, onWorkArea));
+        }
+    }
+}
 
+async function openDisplayRegionsModal() {
     const displays = await fetchDisplaysForRegions(true);
-    const match = displayMatchingRegion(displays);
-    const region = currentRegionValues(REGION_FIELD_IDS);
-    const subtitle = document.getElementById('displayRegionsSubtitle');
-    if (subtitle) {
-        subtitle.textContent = match
-            ? t('dynamic.displayRegions.subtitle').replace('{n}', String(match.number)).replace('{name}', match.name).replace('{w}', String(region[2])).replace('{h}', String(region[3]))
-            : t('dynamic.displayRegions.subtitleNoDisplay');
+    if (!displays || displays.length === 0) {
+        showStatus(t('status.displaysLoadFailed'), 'error');
+        return;
+    }
+    buildDisplayRegionsDrafts(displays);
+    const drafts = [...displayRegionsDrafts.values()];
+    const regionDisplay = displayMatchingRegion(displays);
+    displayRegionsDraft = drafts.find(d => d.columns && d.rows)
+        || (regionDisplay && displayRegionsDrafts.get(regionDisplay.id))
+        || drafts.find(d => d.display.primary)
+        || drafts[0];
+    displayRegionsSelectedCell = 0;
+    displayRegionsCustomMode = !!displayRegionsDraft.columns && !(displayRegionsDraft.columns === displayRegionsDraft.rows && displayRegionsDraft.columns <= 4);
+    for (const d of drafts) {
+        if (d.columns && d.rows) {
+            const active = displayRegionsDraft;
+            displayRegionsDraft = d;
+            setDisplayRegionsDims(d.columns, d.rows);
+            displayRegionsDraft = active;
+        }
     }
 
     const modal = document.getElementById('display-regions-modal');
     const applyBtn = document.getElementById('display-regions-apply');
     const cancelBtn = document.getElementById('display-regions-cancel');
     const sizeButtons = [...document.querySelectorAll('#displayRegionsSize button[data-size]')];
-    renderDisplayRegionsModal();
+    const customInputs = ['displayRegionsColumns', 'displayRegionsRows'].map(id => document.getElementById(id)).filter(Boolean);
+    const fitBox = document.getElementById('displayRegionsFitToGrid');
+    const workBox = document.getElementById('displayRegionsUseWorkArea');
     document.body.appendChild(modal);
     modal.classList.add('show');
+    renderDisplayRegionsModal();
 
-    const onSize = (e) => setDisplayRegionsSize(Number(e.currentTarget.dataset.size));
+    const onSize = (e) => {
+        const size = e.currentTarget.dataset.size;
+        if (size === 'custom') chooseCustomDisplayRegionsSplit();
+        else setDisplayRegionsSize(Number(size));
+    };
+    const onCustomInput = () => onDisplayRegionsCustomInput();
+    const onFit = () => {
+        displayRegionsDraft.fitToGrid = !!fitBox?.checked;
+        renderDisplayRegionsModal();
+    };
+    const onWork = () => {
+        displayRegionsDraft.useWorkArea = !!workBox?.checked;
+        renderDisplayRegionsModal();
+    };
     const finish = () => {
         modal.classList.remove('show');
         applyBtn.removeEventListener('click', onApply);
         cancelBtn.removeEventListener('click', onCancel);
         sizeButtons.forEach(b => b.removeEventListener('click', onSize));
+        customInputs.forEach(i => i.removeEventListener('input', onCustomInput));
+        fitBox?.removeEventListener('change', onFit);
+        workBox?.removeEventListener('change', onWork);
     };
     const onApply = () => {
-        const size = displayRegionsDraft.size;
-        currentConfig.display.displayGrid = size
-            ? { size, slots: displayRegionsDraft.slots.slice(0, size * size).map(normalizeDisplayRegionSlot) }
-            : { size: 0, slots: [] };
+        const layouts = [];
+        for (const draft of displayRegionsDrafts.values()) {
+            const { columns, rows } = draft;
+            if (!columns || !rows) continue;
+            const rect = displayRegionsDraftRect(draft);
+            layouts.push({
+                displayId: draft.display.id,
+                x: rect[0], y: rect[1], width: rect[2], height: rect[3],
+                useWorkArea: draft.useWorkArea,
+                grid: {
+                    size: columns === rows ? columns : 0, columns, rows,
+                    fitToGrid: !!draft.fitToGrid,
+                    slots: draft.slots.slice(0, columns * rows).map(normalizeDisplayRegionSlot),
+                },
+            });
+        }
+        currentConfig.display.displayLayouts = [...layouts, ...displayRegionsDetached];
+        // Per-display layouts supersede the v1.3.0 single grid, which is now migrated into them.
+        currentConfig.display.displayGrid = { size: 0, columns: 0, rows: 0, fitToGrid: false, slots: [] };
         finish();
         markAsChanged();
         scheduleThumbnailPreview();
@@ -1831,6 +2065,9 @@ async function openDisplayRegionsModal() {
     applyBtn.addEventListener('click', onApply);
     cancelBtn.addEventListener('click', onCancel);
     sizeButtons.forEach(b => b.addEventListener('click', onSize));
+    customInputs.forEach(i => i.addEventListener('input', onCustomInput));
+    fitBox?.addEventListener('change', onFit);
+    workBox?.addEventListener('change', onWork);
 }
 
 // Asks how to set a new Thumbnail Space region. Resolves to { mode: 'draw' }, { mode: 'display', rect }, or null if cancelled.

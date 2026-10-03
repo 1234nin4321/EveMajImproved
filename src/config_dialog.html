@@ -2798,7 +2798,13 @@
     <div id="display-regions-modal" class="modal">
         <div class="modal-content modal-wide">
             <h3 data-i18n="misc.display-regions-heading">Display Regions</h3>
-            <p id="displayRegionsSubtitle" class="hint" style="margin: 0 0 8px 0;"></p>
+            <p class="display-regions-intro" data-i18n="misc.display-regions-pick-display">Pick a display, then choose how to split it. Each display can have its own grid.</p>
+            <div id="displayRegionsDisplayDiagram" class="display-diagram display-regions-display-diagram"></div>
+            <p id="displayRegionsSubtitle" class="display-regions-subtitle"></p>
+            <label class="display-regions-fit">
+                <input type="checkbox" id="displayRegionsUseWorkArea" data-untracked checked>
+                <span class="label-body" data-i18n="field.regionDisplayUseWorkArea.label">Leave Room for the Taskbar</span>
+            </label>
             <div class="display-regions-size" id="displayRegionsSize">
                 <span class="display-regions-size-label" data-i18n="field.displayRegionsSize.label">Split</span>
                 <button type="button" data-size="0" data-i18n="dynamic.displayRegions.off">Off</button>
@@ -2806,7 +2812,20 @@
                 <button type="button" data-size="2">2×2</button>
                 <button type="button" data-size="3">3×3</button>
                 <button type="button" data-size="4">4×4</button>
+                <button type="button" data-size="custom" data-i18n="dynamic.displayRegions.custom">Custom</button>
+                <span id="displayRegionsCustomInputs" class="display-regions-custom" style="display: none;">
+                    <label for="displayRegionsColumns" data-i18n="field.displayRegionsColumns.label">Columns</label>
+                    <input type="number" id="displayRegionsColumns" data-untracked min="1" max="8">
+                    <span aria-hidden="true">×</span>
+                    <label for="displayRegionsRows" data-i18n="field.displayRegionsRows.label">Rows</label>
+                    <input type="number" id="displayRegionsRows" data-untracked min="1" max="8">
+                </span>
             </div>
+            <label class="display-regions-fit">
+                <input type="checkbox" id="displayRegionsFitToGrid" data-untracked>
+                <span class="label-body" data-i18n="field.displayRegionsFitToGrid.label">Fit to Grid</span>
+            </label>
+            <p id="displayRegionsFitHint" class="display-regions-fit-hint"></p>
             <div class="display-regions-body">
                 <div id="displayRegionsGrid" class="display-regions-grid"></div>
                 <div id="displayRegionsEditor" class="display-regions-editor"></div>

@@ -3604,3 +3604,80 @@ button.confirm-delete:hover {
     font-size: var(--fs-label);
     color: var(--color-text-secondary);
 }
+
+.display-regions-size {
+    flex-wrap: wrap;
+}
+
+.display-regions-custom {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-1);
+    margin-left: var(--space-1);
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.display-regions-custom label {
+    display: inline;
+    margin: 0;
+    padding-left: 0;
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.display-regions-custom label::before {
+    content: none;
+}
+
+.display-regions-custom input[type="number"] {
+    width: 52px;
+}
+
+/* Past 4x4, cells are too small for their label - the number alone identifies them. */
+.display-regions-grid.is-dense .display-region-cell-label {
+    display: none;
+}
+
+.display-regions-grid.is-dense .display-region-cell-number {
+    font-size: 12px;
+}
+
+.display-regions-fit {
+    margin: 0 0 2px 0;
+}
+
+.display-regions-fit-hint {
+    margin: 0 0 var(--space-2) 0;
+}
+
+/* Display Regions: per-display picker */
+.display-regions-intro,
+.display-regions-subtitle,
+.display-regions-fit-hint {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.display-regions-subtitle {
+    color: var(--color-text-secondary);
+    font-weight: var(--fw-medium);
+}
+
+.display-regions-display-diagram {
+    margin-bottom: var(--space-2);
+}
+
+.display-tile.has-layout {
+    border-style: solid;
+    border-color: var(--color-text-secondary);
+}
+
+.display-tile-layout {
+    position: absolute;
+    left: 4px;
+    bottom: 3px;
+    font-size: var(--fs-micro);
+    color: var(--color-accent);
+}

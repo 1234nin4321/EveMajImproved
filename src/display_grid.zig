@@ -1,9 +1,9 @@
-//! Display Regions: splits the Thumbnail Space region (normally a full display) into an NxN grid of cells, each holding only the thumbnails its rule claims. Platform-neutral (no Win32), so the routing rule and cell maths unit-test anywhere; painter.zig does the actual placement.
+//! Display Regions: splits the Thumbnail Space region (normally a full display) into a columns x rows grid of cells, each holding only the thumbnails its rule claims. Platform-neutral (no Win32), so the routing rule and cell maths unit-test anywhere; painter.zig does the actual placement.
 const std = @import("std");
 
-/// Largest grid offered (4x4 = 16 cells).
-pub const MAX_SIZE: u8 = 4;
-pub const MAX_CELLS: usize = @as(usize, MAX_SIZE) * MAX_SIZE;
+/// Largest columns/rows count a custom split allows (8x8 = 64 cells); the dialog's presets stop at 4x4.
+pub const MAX_DIM: u8 = 8;
+pub const MAX_CELLS: usize = @as(usize, MAX_DIM) * MAX_DIM;
 
 pub const SlotKind = enum {
     /// Holds nothing.
@@ -27,17 +27,32 @@ pub const Slot = struct {
 };
 
 pub const DisplayGrid = struct {
-    /// 0 = off; 1..MAX_SIZE = an NxN split of the Thumbnail Space region.
+    /// Square NxN split (0 = off). Superseded by columns/rows when both are set; kept so v1.3.0 profiles still load.
     size: u8 = 0,
+    /// Custom columns x rows split; both must be non-zero to take effect.
+    columns: u8 = 0,
+    rows: u8 = 0,
+    /// Stretch thumbnails to fill their cell exactly (a 2x2 grid on 2560x1440 gives 1280x720 thumbnails) instead of keeping the configured thumbnail shape inside it.
+    fitToGrid: bool = false,
     /// Row-major, one per cell; missing trailing cells count as Empty.
     slots: []const Slot = &.{},
 
+    pub fn columnCount(self: DisplayGrid) u8 {
+        return if (self.columns > 0 and self.rows > 0) self.columns else self.size;
+    }
+
+    pub fn rowCount(self: DisplayGrid) u8 {
+        return if (self.columns > 0 and self.rows > 0) self.rows else self.size;
+    }
+
     pub fn isActive(self: DisplayGrid) bool {
-        return self.size >= 1 and self.size <= MAX_SIZE;
+        const c = self.columnCount();
+        const r = self.rowCount();
+        return c >= 1 and r >= 1 and c <= MAX_DIM and r <= MAX_DIM;
     }
 
     pub fn cellCount(self: DisplayGrid) usize {
-        return if (self.isActive()) @as(usize, self.size) * self.size else 0;
+        return if (self.isActive()) @as(usize, self.columnCount()) * self.rowCount() else 0;
     }
 
     /// Frees everything clone()/fromJsonValue() allocated; a default (unallocated) grid is a no-op.
@@ -53,7 +68,7 @@ pub const DisplayGrid = struct {
 
     /// Deep copy owned by `allocator` (e.g. out of a JSON parse arena).
     pub fn clone(self: DisplayGrid, allocator: std.mem.Allocator) !DisplayGrid {
-        var out: DisplayGrid = .{ .size = self.size };
+        var out: DisplayGrid = .{ .size = self.size, .columns = self.columns, .rows = self.rows, .fitToGrid = self.fitToGrid };
         if (self.slots.len == 0) return out;
         errdefer out.deinit(allocator);
 
@@ -82,7 +97,9 @@ pub const DisplayGrid = struct {
     }
 
     pub fn validate(self: *DisplayGrid) void {
-        if (self.size > MAX_SIZE) self.size = MAX_SIZE;
+        if (self.size > MAX_DIM) self.size = MAX_DIM;
+        if (self.columns > MAX_DIM) self.columns = MAX_DIM;
+        if (self.rows > MAX_DIM) self.rows = MAX_DIM;
     }
 };
 
@@ -113,23 +130,181 @@ pub fn assignSlot(grid: DisplayGrid, name: []const u8, account_of: ?[]const u8) 
 
 pub const Rect = struct { left: i32, top: i32, right: i32, bottom: i32 };
 
-/// Cell `index` (row-major) of `region` split `size` x `size`, with `gap` px between cells; the last row/column absorbs rounding so cells tile the region exactly.
-pub fn cellRect(region: Rect, size: u8, index: usize, gap: i32) Rect {
-    const n: i32 = @max(size, 1);
-    const col: i32 = @intCast(index % @as(usize, @intCast(n)));
-    const row: i32 = @intCast(index / @as(usize, @intCast(n)));
+/// Most displays that can each carry their own grid.
+pub const MAX_LAYOUTS: usize = 8;
+
+/// One display's grid: the physical-pixel area it splits (the display's bounds or work area, captured when it was set up) plus its cells.
+pub const DisplayLayout = struct {
+    /// The display's stable id (its monitor device path, see displays.zig), so the dialog can match a layout back to its display.
+    displayId: []const u8 = "",
+    x: i32 = 0,
+    y: i32 = 0,
+    width: i32 = 0,
+    height: i32 = 0,
+    /// Whether x/y/width/height came from the work area (taskbar excluded) rather than the full bounds; only the dialog reads this.
+    useWorkArea: bool = true,
+    grid: DisplayGrid = .{},
+
+    pub fn rect(self: DisplayLayout) Rect {
+        return .{ .left = self.x, .top = self.y, .right = self.x + self.width, .bottom = self.y + self.height };
+    }
+
+    pub fn isActive(self: DisplayLayout) bool {
+        return self.width > 0 and self.height > 0 and self.grid.isActive();
+    }
+};
+
+pub fn freeLayouts(allocator: std.mem.Allocator, layouts: []const DisplayLayout) void {
+    for (layouts) |layout| {
+        if (layout.displayId.len > 0) allocator.free(layout.displayId);
+        var grid = layout.grid;
+        grid.deinit(allocator);
+    }
+    if (layouts.len > 0) allocator.free(layouts);
+}
+
+/// Deep copy owned by `allocator`; at most MAX_LAYOUTS are kept.
+pub fn cloneLayouts(allocator: std.mem.Allocator, layouts: []const DisplayLayout) ![]const DisplayLayout {
+    if (layouts.len == 0) return &.{};
+    const out = try allocator.alloc(DisplayLayout, @min(layouts.len, MAX_LAYOUTS));
+    for (out) |*o| o.* = .{};
+    errdefer freeLayouts(allocator, out);
+    for (out, layouts[0..out.len]) |*dst, src| {
+        dst.* = .{ .x = src.x, .y = src.y, .width = src.width, .height = src.height, .useWorkArea = src.useWorkArea };
+        if (src.displayId.len > 0) dst.displayId = try allocator.dupe(u8, src.displayId);
+        dst.grid = try src.grid.clone(allocator);
+    }
+    return out;
+}
+
+/// Live-preview counterpart of cloneLayouts, from a loose std.json.Value array.
+pub fn layoutsFromJsonValue(allocator: std.mem.Allocator, value: std.json.Value) ![]const DisplayLayout {
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const parsed = try std.json.parseFromValueLeaky([]const DisplayLayout, arena.allocator(), value, .{ .ignore_unknown_fields = true });
+    return cloneLayouts(allocator, parsed);
+}
+
+/// A grid placed on screen: what the painter routes thumbnails through. Cells of every view share one global index space, in view order.
+pub const LayoutView = struct {
+    rect: Rect,
+    grid: DisplayGrid,
+};
+
+pub fn totalCells(views: []const LayoutView) usize {
+    var total: usize = 0;
+    for (views) |v| total += v.grid.cellCount();
+    return total;
+}
+
+pub const CellRef = struct { view: usize, local: usize };
+
+/// Which view (and which of its cells) global cell `global` is.
+pub fn locate(views: []const LayoutView, global: usize) ?CellRef {
+    var base: usize = 0;
+    for (views, 0..) |v, i| {
+        const count = v.grid.cellCount();
+        if (global < base + count) return .{ .view = i, .local = global - base };
+        base += count;
+    }
+    return null;
+}
+
+/// assignSlot across every view: one priority pass over all displays' cells (Client, then Custom, then Account, then Everyone Else), returning a global cell index.
+pub fn assignSlotMulti(views: []const LayoutView, name: []const u8, account_of: ?[]const u8) ?usize {
+    const passes = [_]SlotKind{ .Client, .Custom, .Account, .EveryoneElse };
+    for (passes) |kind| {
+        var base: usize = 0;
+        for (views) |v| {
+            const cells = @min(v.grid.cellCount(), v.grid.slots.len);
+            for (v.grid.slots[0..cells], 0..) |slot, i| {
+                if (slot.kind != kind) continue;
+                if (slotClaims(slot, name, account_of)) return base + i;
+            }
+            base += v.grid.cellCount();
+        }
+    }
+    return null;
+}
+
+fn slotClaims(slot: Slot, name: []const u8, account_of: ?[]const u8) bool {
+    return switch (slot.kind) {
+        .Empty => false,
+        .EveryoneElse => true,
+        .Client => slot.characters.len > 0 and std.ascii.eqlIgnoreCase(slot.characters[0], name),
+        .Custom => for (slot.characters) |c| {
+            if (std.ascii.eqlIgnoreCase(c, name)) break true;
+        } else false,
+        .Account => account_of != null and slot.account != null and std.mem.eql(u8, slot.account.?, account_of.?),
+    };
+}
+
+/// Screen rect of global cell `global`.
+pub fn cellRectMulti(views: []const LayoutView, global: usize, gap: i32) ?Rect {
+    const ref = locate(views, global) orelse return null;
+    const v = views[ref.view];
+    return cellRect(v.rect, v.grid.columnCount(), v.grid.rowCount(), ref.local, gap);
+}
+
+/// Cell `index` (row-major) of `region` split `columns` x `rows`, with `gap` px between cells; the last row/column absorbs rounding so cells tile the region exactly.
+pub fn cellRect(region: Rect, columns: u8, rows: u8, index: usize, gap: i32) Rect {
+    const nc: i32 = @max(columns, 1);
+    const nr: i32 = @max(rows, 1);
+    const col: i32 = @intCast(index % @as(usize, @intCast(nc)));
+    const row: i32 = @intCast(index / @as(usize, @intCast(nc)));
     const width = region.right - region.left;
     const height = region.bottom - region.top;
-    const cell_w = @divTrunc(width - gap * (n - 1), n);
-    const cell_h = @divTrunc(height - gap * (n - 1), n);
+    const cell_w = @divTrunc(width - gap * (nc - 1), nc);
+    const cell_h = @divTrunc(height - gap * (nr - 1), nr);
     const left = region.left + col * (cell_w + gap);
     const top = region.top + row * (cell_h + gap);
     return .{
         .left = left,
         .top = top,
-        .right = if (col == n - 1) region.right else left + cell_w,
-        .bottom = if (row == n - 1) region.bottom else top + cell_h,
+        .right = if (col == nc - 1) region.right else left + cell_w,
+        .bottom = if (row == nr - 1) region.bottom else top + cell_h,
     };
+}
+
+pub const FillGrid = struct { columns: u32, rows: u32, tile_width: i32, tile_height: i32 };
+
+/// Fit to Grid: tiles `count` thumbnails across `cell` with no leftover space, choosing the columns x rows split whose tile shape is closest to `aspect` (the configured thumbnail width/height). One thumbnail fills the whole cell.
+pub fn fillGrid(cell: Rect, count: usize, spacing: i32, aspect: f32) FillGrid {
+    const width = cell.right - cell.left;
+    const height = cell.bottom - cell.top;
+    const n: u32 = @intCast(@max(count, 1));
+    var best: FillGrid = .{ .columns = 1, .rows = n, .tile_width = width, .tile_height = height };
+    var best_score: f32 = std.math.floatMax(f32);
+    var cols: u32 = 1;
+    while (cols <= n) : (cols += 1) {
+        const rows = (n + cols - 1) / cols;
+        // Skip splits that leave a whole empty row.
+        if ((rows - 1) * cols >= n) continue;
+        const tw = @divTrunc(width - spacing * @as(i32, @intCast(cols - 1)), @as(i32, @intCast(cols)));
+        const th = @divTrunc(height - spacing * @as(i32, @intCast(rows - 1)), @as(i32, @intCast(rows)));
+        if (tw <= 0 or th <= 0) continue;
+        const tile_aspect = @as(f32, @floatFromInt(tw)) / @as(f32, @floatFromInt(th));
+        const score = @abs(@log(tile_aspect / @max(aspect, 0.01)));
+        if (score < best_score) {
+            best_score = score;
+            best = .{ .columns = cols, .rows = rows, .tile_width = tw, .tile_height = th };
+        }
+    }
+    return best;
+}
+
+test "fillGrid: one thumbnail fills the cell, several split it evenly" {
+    const cell: Rect = .{ .left = 0, .top = 0, .right = 1280, .bottom = 720 };
+    try std.testing.expectEqual(FillGrid{ .columns = 1, .rows = 1, .tile_width = 1280, .tile_height = 720 }, fillGrid(cell, 1, 0, 16.0 / 9.0));
+    // 4 x 16:9 in a 16:9 cell -> 2x2 of 640x360.
+    try std.testing.expectEqual(FillGrid{ .columns = 2, .rows = 2, .tile_width = 640, .tile_height = 360 }, fillGrid(cell, 4, 0, 16.0 / 9.0));
+    // 2 in a 16:9 cell: side-by-side and stacked are equally far from 16:9, so only check that it uses exactly two tiles.
+    const two = fillGrid(cell, 2, 10, 16.0 / 9.0);
+    try std.testing.expectEqual(@as(u32, 2), two.columns * two.rows);
+    // 3 in a tall portrait cell stack vertically.
+    const tall = fillGrid(.{ .left = 0, .top = 0, .right = 1080, .bottom = 1920 }, 3, 0, 16.0 / 9.0);
+    try std.testing.expectEqual(@as(u32, 1), tall.columns);
+    try std.testing.expectEqual(@as(i32, 640), tall.tile_height);
 }
 
 test "assignSlot priority: client > custom > account > everyone else" {
@@ -157,20 +332,76 @@ test "assignSlot ignores slots beyond the grid and returns null with no catch-al
 
 test "cellRect tiles the region exactly" {
     const region: Rect = .{ .left = 0, .top = 0, .right = 2560, .bottom = 1440 };
-    const a = cellRect(region, 2, 0, 10);
-    const d = cellRect(region, 2, 3, 10);
+    const a = cellRect(region, 2, 2, 0, 10);
+    const d = cellRect(region, 2, 2, 3, 10);
     try std.testing.expectEqual(Rect{ .left = 0, .top = 0, .right = 1275, .bottom = 715 }, a);
     try std.testing.expectEqual(Rect{ .left = 1285, .top = 725, .right = 2560, .bottom = 1440 }, d);
-    const whole = cellRect(.{ .left = -1080, .top = -240, .right = 0, .bottom = 1680 }, 1, 0, 10);
+    const whole = cellRect(.{ .left = -1080, .top = -240, .right = 0, .bottom = 1680 }, 1, 1, 0, 10);
     try std.testing.expectEqual(Rect{ .left = -1080, .top = -240, .right = 0, .bottom = 1680 }, whole);
     // 3x3 with a remainder: last column ends exactly on the region edge.
-    try std.testing.expectEqual(@as(i32, 1000), cellRect(.{ .left = 0, .top = 0, .right = 1000, .bottom = 999 }, 3, 8, 0).right);
+    try std.testing.expectEqual(@as(i32, 1000), cellRect(.{ .left = 0, .top = 0, .right = 1000, .bottom = 999 }, 3, 3, 8, 0).right);
+}
+
+test "custom columns x rows overrides size and tiles non-square" {
+    const grid: DisplayGrid = .{ .size = 2, .columns = 3, .rows = 2 };
+    try std.testing.expectEqual(@as(usize, 6), grid.cellCount());
+    try std.testing.expectEqual(@as(u8, 3), grid.columnCount());
+    const legacy: DisplayGrid = .{ .size = 4 };
+    try std.testing.expectEqual(@as(usize, 16), legacy.cellCount());
+    const half: DisplayGrid = .{ .columns = 3 };
+    try std.testing.expectEqual(@as(usize, 0), half.cellCount());
+    const too_big: DisplayGrid = .{ .columns = 9, .rows = 1 };
+    try std.testing.expect(!too_big.isActive());
+
+    // 3 across x 2 down over 3000x1000: index 4 is the middle of the bottom row.
+    const region: Rect = .{ .left = 0, .top = 0, .right = 3000, .bottom = 1000 };
+    try std.testing.expectEqual(Rect{ .left = 1000, .top = 500, .right = 2000, .bottom = 1000 }, cellRect(region, 3, 2, 4, 0));
+    try std.testing.expectEqual(Rect{ .left = 2000, .top = 0, .right = 3000, .bottom = 500 }, cellRect(region, 3, 2, 2, 0));
+}
+
+test "multi-display: one priority pass across displays, global cell indices" {
+    const d1_slots = [_]Slot{ .{ .kind = .EveryoneElse }, .{ .kind = .Empty }, .{ .kind = .Empty }, .{ .kind = .Custom, .characters = &.{"Miner Three"} } };
+    const d2_slots = [_]Slot{ .{ .kind = .Account, .account = "acc_alts" }, .{ .kind = .Client, .characters = &.{"FC Zoetrope"} }, .{ .kind = .Empty } };
+    const views = [_]LayoutView{
+        .{ .rect = .{ .left = 0, .top = 0, .right = 2560, .bottom = 1440 }, .grid = .{ .size = 2, .slots = &d1_slots } },
+        .{ .rect = .{ .left = 2560, .top = 180, .right = 4480, .bottom = 1260 }, .grid = .{ .columns = 3, .rows = 1, .slots = &d2_slots } },
+    };
+    try std.testing.expectEqual(@as(usize, 7), totalCells(&views));
+    // Client on display 2 beats display 1's catch-all.
+    try std.testing.expectEqual(@as(?usize, 5), assignSlotMulti(&views, "FC Zoetrope", "acc_main"));
+    // Custom on display 1 beats the Account cell on display 2.
+    try std.testing.expectEqual(@as(?usize, 3), assignSlotMulti(&views, "Miner Three", "acc_alts"));
+    try std.testing.expectEqual(@as(?usize, 4), assignSlotMulti(&views, "Alt Two", "acc_alts"));
+    try std.testing.expectEqual(@as(?usize, 0), assignSlotMulti(&views, "Nobody", null));
+    try std.testing.expectEqual(CellRef{ .view = 1, .local = 1 }, locate(&views, 5).?);
+    try std.testing.expectEqual(Rect{ .left = 3200, .top = 180, .right = 3840, .bottom = 1260 }, cellRectMulti(&views, 5, 0).?);
+    try std.testing.expect(locate(&views, 7) == null);
+    try std.testing.expectEqual(@as(?usize, null), assignSlotMulti(views[1..], "Nobody", null));
+}
+
+test "layouts clone and parse without leaks" {
+    const allocator = std.testing.allocator;
+    const json =
+        \\[{"displayId":"\\\\?\\DISPLAY#DEL","x":0,"y":0,"width":2560,"height":1392,"grid":{"columns":2,"rows":2,"fitToGrid":true,"slots":[{"kind":"EveryoneElse"}]}},
+        \\ {"displayId":"\\\\.\\DISPLAY3","x":2560,"y":180,"width":1920,"height":1080,"useWorkArea":false,"grid":{"size":1,"slots":[{"kind":"Account","account":"acc_1"}]}}]
+    ;
+    const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
+    defer parsed.deinit();
+    const layouts = try layoutsFromJsonValue(allocator, parsed.value);
+    defer freeLayouts(allocator, layouts);
+    try std.testing.expectEqual(@as(usize, 2), layouts.len);
+    try std.testing.expect(layouts[0].grid.fitToGrid);
+    try std.testing.expect(layouts[1].isActive());
+    try std.testing.expectEqualStrings("acc_1", layouts[1].grid.slots[0].account.?);
+    const copy = try cloneLayouts(allocator, layouts);
+    defer freeLayouts(allocator, copy);
+    try std.testing.expectEqual(@as(i32, 2560), copy[1].x);
 }
 
 test "clone, fromJsonValue and deinit round-trip without leaks" {
     const allocator = std.testing.allocator;
     const json =
-        \\{"size":3,"slots":[{"kind":"Client","characters":["FC Zoetrope"]},{"kind":"Account","account":"acc_1"},{"kind":"EveryoneElse"},{"kind":"Empty","extra":1}]}
+        \\{"size":3,"columns":0,"rows":0,"slots":[{"kind":"Client","characters":["FC Zoetrope"]},{"kind":"Account","account":"acc_1"},{"kind":"EveryoneElse"},{"kind":"Empty","extra":1}]}
     ;
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
     defer parsed.deinit();
