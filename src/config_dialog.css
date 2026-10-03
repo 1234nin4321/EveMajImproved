@@ -3741,3 +3741,60 @@ button.confirm-delete:hover {
 .account-key-members:empty {
     display: none;
 }
+
+/* Improvements tab */
+.improvements-intro {
+    margin: 0 0 var(--space-2) 0;
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.improvements-link-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--color-border-faint);
+}
+
+.improvements-link-row:last-child {
+    border-bottom: none;
+}
+
+.improvements-link-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.improvements-link-title {
+    color: var(--color-text);
+    font-weight: var(--fw-medium);
+}
+
+.improvements-link-hint {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.improvements-link-row > button {
+    flex: none;
+    min-width: 64px;
+}
+
+/* Brief highlight on the section a Go link lands on. */
+@keyframes improvements-flash {
+    from { box-shadow: 0 0 0 2px var(--color-accent); }
+    to { box-shadow: 0 0 0 2px transparent; }
+}
+
+.improvements-flash {
+    animation: improvements-flash 1.4s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .improvements-flash {
+        animation: none;
+    }
+}

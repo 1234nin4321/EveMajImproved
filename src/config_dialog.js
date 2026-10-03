@@ -1347,14 +1347,13 @@ function switchTab(panelId) {
         fitHotkeyGroupCharsList(selectedHotkeyGroupIndex);
     }
     if (panelId === 'characters') alignDetailPanelNameLabel('charactersList');
-    // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
-    if (panelId === 'accounts' && !accountScanStarted) scanEveAccounts();
-    if (panelId === 'key-bindings') {
+    if (panelId === 'improvements') {
+        // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
+        if (!accountScanStarted) scanEveAccounts();
+        // Account names may have changed since the bindings were last drawn.
         saveAccountKeyBindings();
         populateAccountKeyBindings();
-    }
-    // The diagram needs the panel's real width, which only exists once it's visible.
-    if (panelId === 'displays') {
+        // The diagram needs the panel's real width, which only exists once it's visible.
         if (!displaysLoadStarted) loadDisplays();
         else renderDisplays();
     }
@@ -1367,7 +1366,7 @@ function switchTab(panelId) {
 }
 
 // Tabs whose sections are too few/short to be worth a sidebar sub-list.
-const TABS_WITHOUT_SUBHEADERS = ['about', 'characters', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty', 'key-bindings'];
+const TABS_WITHOUT_SUBHEADERS = ['about', 'characters', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty'];
 
 // IDs/labels are derived from each section's h3[data-i18n] rather than hand-maintained, so they can't drift out of sync as sections are added/removed.
 function buildSectionNav() {
@@ -2023,7 +2022,22 @@ function onDisplayRegionAccountChange(accountId) {
 
 function goToAccountConfigFromRegions() {
     document.getElementById('display-regions-cancel')?.click();
-    switchTab('accounts');
+    goToImprovementElsewhere('improvements', 'accountCharactersList');
+}
+
+// Switches tab, then scrolls to and briefly highlights the element - used by the Improvements tab's links to features built into other tabs, and back from them.
+function goToImprovementElsewhere(tab, elementId) {
+    switchTab(tab);
+    // After switchTab's own scroll reset and any lazy rendering it kicked off.
+    setTimeout(() => {
+        const target = document.getElementById(elementId);
+        if (!target) return;
+        const section = target.closest('.section') || target;
+        section.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+        section.classList.remove('improvements-flash');
+        void section.offsetWidth;
+        section.classList.add('improvements-flash');
+    }, 60);
 }
 
 // Edits one thumbnail region's grid (the list in Thumbnail Space picks which).
@@ -5059,11 +5073,10 @@ function showUpdateAvailableModal(version, url, notes) {
         closeBtn.removeEventListener('click', handleClose);
         gotoBtn.removeEventListener('click', handleGoto);
     };
-    // Jumps to the About tab's updater, which re-checks so this process's backend has the release to download.
+    // Jumps to the Improvements tab's updater, which re-checks so this process's backend has the release to download.
     const handleGoto = () => {
         handleClose();
-        switchTab('about');
-        document.getElementById('updates-section')?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+        goToImprovementElsewhere('improvements', 'update-status-text');
         checkForUpdatesNow();
     };
 
@@ -5207,7 +5220,7 @@ function renderDisplays() {
 
 // The diagram is laid out from the panel's pixel width, so re-fit it when the dialog is resized.
 window.addEventListener('resize', () => {
-    if (displaysData && document.querySelector('.panel-content[data-panel="displays"].active')) renderDisplays();
+    if (displaysData && document.querySelector('.panel-content[data-panel="improvements"].active')) renderDisplays();
 });
 
 // ---- Key Binding tab: hotkeys bound to Account Config accounts (config.accountHotkeys; handled by hotkeys.zig's activateAccount) ----
@@ -5230,7 +5243,7 @@ function populateAccountKeyBindings() {
     if (bindings.length === 0) {
         container.innerHTML = accounts.length === 0
             ? `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.noAccounts'))}</p>
-               <button type="button" class="button-outline" onclick="switchTab('accounts')">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`
+               <button type="button" class="button-outline" onclick="goToImprovementElsewhere('improvements', 'accountCharactersList')">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`
             : `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.empty'))}</p>`;
         updateHotkeyConflictHighlights();
         return;
