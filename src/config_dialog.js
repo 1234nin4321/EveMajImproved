@@ -2740,12 +2740,14 @@ let importFormat = null;
 // Must match config.zig's PROFILE_FORMAT_IDENTIFIER, stamped onto every profile this app saves so it can be recognized outright instead of guessed at like the legacy formats below.
 const MAJ_FORMAT_IDENTIFIER = 'eve-maj-preview';
 
+// Every interpolation into innerHTML/attribute templates must go through this: names, paths and labels can come from imported or shared profile files, and a script injected here could reach the Zig bindings.
 function escapeHtml(str) {
     return String(str)
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
 }
 
 // Mirrors combineKey()/extractVk()/extractModifiers() in virtual_keys.zig: low byte = base VK code, bits 8-11 = MOD_ALT/MOD_CONTROL/MOD_SHIFT/MOD_WIN.
@@ -4697,7 +4699,7 @@ function vkHexToFriendly(str) {
 // The .keycap-render span draws the bound combo as key caps over the input, which keeps its own text transparent;
 // refreshHotkeyKeycaps() fills it, and CSS uncovers the raw input again while it's recording or being typed into.
 function renderHotkeyInputHtml(fieldId, value, placeholder, extraAttributes = '') {
-    return `<span class="keycap-field"><input type="text" id="${fieldId}" class="hotkey-input" value="${value}" placeholder="${t('common.hotkeyClickToBind')}" title="${placeholder}"${extraAttributes} onclick="if (!this.classList.contains('manual-editing')) recordHotkey('${fieldId}')" readonly><span class="keycap-render" aria-hidden="true"></span></span>
+    return `<span class="keycap-field"><input type="text" id="${fieldId}" class="hotkey-input" value="${escapeHtml(value)}" placeholder="${t('common.hotkeyClickToBind')}" title="${escapeHtml(placeholder)}"${extraAttributes} onclick="if (!this.classList.contains('manual-editing')) recordHotkey('${fieldId}')" readonly><span class="keycap-render" aria-hidden="true"></span></span>
 <button type="button" class="button-icon button-icon-danger" onclick="clearHotkey('${fieldId}')" title="${t('common.hotkeyClear')}">×</button>
 <button type="button" class="hotkey-edit-btn" onclick="toggleManualHotkeyEdit('${fieldId}')" title="${t('common.hotkeyTypeDirectly')}">✎</button>`;
 }
@@ -5251,7 +5253,7 @@ function populateAccountKeyBindings() {
             <div class="account-key-row list-container">
                 <div class="field-row">
                     <select id="acctkey_${index}_account" aria-label="${escapeHtml(t('dynamic.displayRegions.accountLabel'))}" onchange="onAccountKeyBindingAccountChange(${index})">${options}</select>
-                    ${renderHotkeyInputHtml(`acctkey_${index}_hotkey`, escapeHtml(vkHexToFriendly(binding.hotkey) || ''), t('dynamic.keyBindings.hotkeyPlaceholder'), ` aria-label="${escapeHtml(label)}"`)}
+                    ${renderHotkeyInputHtml(`acctkey_${index}_hotkey`, vkHexToFriendly(binding.hotkey) || '', t('dynamic.keyBindings.hotkeyPlaceholder'), ` aria-label="${escapeHtml(label)}"`)}
                     <button type="button" class="button-remove" id="acctkey_${index}_removeBtn" onclick="confirmRemove('acctkey_${index}_removeBtn', () => removeAccountKeyBinding(${index}))">${escapeHtml(t('common.remove'))}</button>
                 </div>
                 <div class="account-key-members">${escapeHtml(account
@@ -6423,7 +6425,7 @@ function populateSystemColors() {
         const colorDiv = document.createElement('div');
         colorDiv.className = 'field-row list-container';
         colorDiv.innerHTML = `
-            <input type="text" id="systemColor_${index}_name" value="${sc.systemName || ''}" placeholder="${t('dynamic.systemColor.namePlaceholder')}">
+            <input type="text" id="systemColor_${index}_name" value="${escapeHtml(sc.systemName || '')}" placeholder="${t('dynamic.systemColor.namePlaceholder')}">
             <input type="color" id="systemColor_${index}_color" value="${zigColorToHtml(sc.color)}">
             <button type="button" class="button-remove" id="systemColor_${index}_removeBtn" onclick="confirmRemove('systemColor_${index}_removeBtn', () => removeSystemColor(${index}))">${t('common.remove')}</button>
         `;
@@ -6608,8 +6610,8 @@ function populateCharacters() {
             <div class="roster-row ${index === selectedCharacterIndex ? 'selected' : ''}" role="tab" tabindex="0" aria-selected="${index === selectedCharacterIndex}" data-index="${index}" onclick="selectCharacter(${index})">
                 <span class="drag-index-chip character-drag-handle" draggable="true" title="${t('common.dragToReorder')}" onclick="event.stopPropagation()">${String(index + 1).padStart(2, '0')}</span>
                 <!-- <img class="character-portrait" id="char_${index}_portrait" src="${portraitUrl || ''}" alt="" draggable="false" style="${portraitUrl ? '' : 'display:none'}" onerror="this.style.display='none'"> -->
-                <span class="roster-name" id="char_${index}_header_name">${char.name || t('dynamic.character.defaultNamePrefix') + ' ' + (index + 1)}</span>
-                <span class="roster-hotkey-badge" id="char_${index}_hotkeyBadge" style="${hotkeyDisplay ? '' : 'display:none'}">[${hotkeyDisplay}]</span>
+                <span class="roster-name" id="char_${index}_header_name">${escapeHtml(char.name || t('dynamic.character.defaultNamePrefix') + ' ' + (index + 1))}</span>
+                <span class="roster-hotkey-badge" id="char_${index}_hotkeyBadge" style="${hotkeyDisplay ? '' : 'display:none'}">[${escapeHtml(hotkeyDisplay)}]</span>
             </div>
         `;
     }).join('');
@@ -6618,13 +6620,13 @@ function populateCharacters() {
         <div class="detail-panel ${index === selectedCharacterIndex ? 'active' : ''}" data-index="${index}">
             <div class="detail-panel-header">
                 <label class="detail-panel-name-label" for="char_${index}_name">${t('common.characterName')}</label>
-                <input type="text" class="detail-panel-name-input" id="char_${index}_name" value="${char.name || ''}" placeholder="${t('common.characterName')}" oninput="updateCharacterHeaderName(${index})">
+                <input type="text" class="detail-panel-name-input" id="char_${index}_name" value="${escapeHtml(char.name || '')}" placeholder="${t('common.characterName')}" oninput="updateCharacterHeaderName(${index})">
                 <button type="button" id="char_${index}_removeBtn" onclick="confirmRemoveCharacter(${index})">${t('common.remove')}</button>
             </div>
             <div class="detail-form">
                 <div class="detail-field">
                     <label for="char_${index}_displayName">${t('dynamic.character.displayNameLabel')}</label>
-                    <input type="text" id="char_${index}_displayName" value="${char.displayName || ''}" placeholder="${t('dynamic.character.displayNamePlaceholder')}">
+                    <input type="text" id="char_${index}_displayName" value="${escapeHtml(char.displayName || '')}" placeholder="${t('dynamic.character.displayNamePlaceholder')}">
                     <p class="hint hint-extra">${t('dynamic.character.displayNameHint')}</p>
                 </div>
                 <div class="detail-field">
@@ -6816,7 +6818,7 @@ async function refreshWindowPositionSourceOptions() {
             return;
         }
         select.disabled = false;
-        select.innerHTML = names.map(name => `<option value="${name}">${name}</option>`).join('');
+        select.innerHTML = names.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
         if (names.includes(previousValue)) select.value = previousValue;
     } catch (error) {
         logError('Failed to refresh window position source options:', error);
@@ -7715,7 +7717,7 @@ function populateHotkeyGroups() {
         const groupName = group.name || t('dynamic.hotkeyGroup.defaultNamePrefix') + ' ' + (index + 1);
         return `
             <div class="roster-row ${index === selectedHotkeyGroupIndex ? 'selected' : ''}" role="tab" tabindex="0" aria-selected="${index === selectedHotkeyGroupIndex}" data-index="${index}" onclick="selectHotkeyGroup(${index})" title="${t('common.dragToReorder')}">
-                <span class="roster-name" id="hkgroup_${index}_header_name">${groupName}</span>
+                <span class="roster-name" id="hkgroup_${index}_header_name">${escapeHtml(groupName)}</span>
             </div>
         `;
     }).join('');
@@ -7724,7 +7726,7 @@ function populateHotkeyGroups() {
         <div class="detail-panel ${index === selectedHotkeyGroupIndex ? 'active' : ''}" data-index="${index}">
             <div class="detail-panel-header">
                 <label class="detail-panel-name-label" for="hkgroup_${index}_name">${t('dynamic.hotkeyGroup.nameLabel')}</label>
-                <input type="text" class="detail-panel-name-input" id="hkgroup_${index}_name" value="${group.name || ''}" placeholder="${t('dynamic.hotkeyGroup.defaultNamePrefix') + ' ' + (index + 1)}" oninput="updateHotkeyGroupHeaderName(${index})">
+                <input type="text" class="detail-panel-name-input" id="hkgroup_${index}_name" value="${escapeHtml(group.name || '')}" placeholder="${t('dynamic.hotkeyGroup.defaultNamePrefix') + ' ' + (index + 1)}" oninput="updateHotkeyGroupHeaderName(${index})">
                 <button type="button" id="hkgroup_${index}_removeBtn" onclick="confirmRemove('hkgroup_${index}_removeBtn', () => removeHotkeyGroup(${index}))">${t('common.remove')}</button>
             </div>
             <div class="detail-form">
@@ -7879,7 +7881,7 @@ function renderHotkeyGroupCharRows(groupIndex, characters) {
     return characters.map((name, charIndex) => `
         <div class="hkgroup-char-row" data-char-index="${charIndex}">
             <span class="drag-index-chip character-drag-handle" draggable="true" title="${t('common.dragToReorder')}" onclick="event.stopPropagation()">${String(charIndex + 1).padStart(2, '0')}</span>
-            <input type="text" class="hkgroup-char-input" value="${name}" placeholder="${t('common.characterName')}">
+            <input type="text" class="hkgroup-char-input" value="${escapeHtml(name)}" placeholder="${t('common.characterName')}">
             <button type="button" class="button-icon button-icon-danger" onclick="removeHotkeyGroupCharacter(${groupIndex}, ${charIndex})" title="${t('common.remove')}">×</button>
         </div>
     `).join('');
@@ -8432,7 +8434,7 @@ function populateOreTable() {
         row.innerHTML = `
             ${isFirstInCategory ? `<td rowspan="${categoryRowCounts[category]}" class="category-cell"><span class="category-cell-label">${escapeHtml(category)}</span></td>` : ''}
             <td class="event-name-cell">${escapeHtml(entry.name || '')}</td>
-            <td><input type="number" class="ore-price-input" id="ore_${index}_price" value="${entry.price ?? 0}" min="0" step="0.01"></td>
+            <td><input type="number" class="ore-price-input" id="ore_${index}_price" value="${escapeHtml(entry.price ?? 0)}" min="0" step="0.01"></td>
         `;
         tbody.appendChild(row);
     });
@@ -8557,7 +8559,7 @@ function populateNotificationTypes() {
 
         return `
             <div class="roster-row ${index === selectedNotificationTypeIndex ? 'selected' : ''}" role="tab" tabindex="0" aria-selected="${index === selectedNotificationTypeIndex}" data-index="${index}" onclick="selectNotificationType(${index})">
-                <span class="roster-name" title="${eventLabel}">${eventLabel}</span>
+                <span class="roster-name" title="${escapeHtml(eventLabel)}">${escapeHtml(eventLabel)}</span>
             </div>
         `;
     }).join('');
@@ -8586,14 +8588,14 @@ function populateNotificationTypes() {
                         <div class="field-row">
                             <label for="notif_${notifType.key}_duration" title="${t('tab.notifications.table.duration.title')}">${t('tab.notifications.table.duration.heading')}</label>
                             <input type="number" class="detail-number-input" id="notif_${notifType.key}_duration" min="0" max="60" step="0.1"
-                                   value="${config.duration_ms && config.duration_ms > 0 ? config.duration_ms / 1000 : 5}">
+                                   value="${escapeHtml(config.duration_ms && config.duration_ms > 0 ? config.duration_ms / 1000 : 5)}">
                         </div>
                         <p class="hint hint-extra">${t('tab.notifications.detail.duration.hint')}</p>
                         <div class="field-row">
                             <label for="notif_${notifType.key}_throttle" title="${t('tab.notifications.table.throttle.title')}">${t('tab.notifications.table.throttle.heading')}</label>
                             <input type="number" class="detail-number-input" id="notif_${notifType.key}_throttle" min="0" max="300" step="1"
                                    title="${t('tab.notifications.table.throttle.title')}"
-                                   value="${config.throttle_ms !== undefined ? config.throttle_ms / 1000 : 10}">
+                                   value="${escapeHtml(config.throttle_ms !== undefined ? config.throttle_ms / 1000 : 10)}">
                         </div>
                         <p class="hint hint-extra">${t('tab.notifications.detail.throttle.hint')}</p>
                     </div>
@@ -8691,9 +8693,9 @@ function populateNotificationTypes() {
                     <label>${t('tab.notifications.detail.sound.pathLabel')}</label>
                     <div class="field-row">
                         <input type="text" id="notif_${notifType.key}_soundPath" readonly
-                               data-full-path="${config.sound_path || ''}"
-                               value="${soundFileBaseName(config.sound_path)}"
-                               title="${config.sound_path || ''}"
+                               data-full-path="${escapeHtml(config.sound_path || '')}"
+                               value="${escapeHtml(soundFileBaseName(config.sound_path))}"
+                               title="${escapeHtml(config.sound_path || '')}"
                                placeholder="${t('tab.notifications.detail.sound.noFile')}">
                         <button type="button" class="btn-nowrap" id="notif_${notifType.key}_soundBrowseBtn" onclick="browseSoundFile('${notifType.key}')">${t('common.browse')}</button>
                         <button type="button" class="button-icon button-icon-danger" id="notif_${notifType.key}_soundClearBtn" onclick="clearSoundFile('${notifType.key}')" title="${t('tab.notifications.detail.sound.clear')}">&times;</button>
@@ -8704,7 +8706,7 @@ function populateNotificationTypes() {
                     <div class="field-row">
                         <label for="notif_${notifType.key}_soundVolume">${t('field.soundVolume.label')}</label>
                         <input type="range" id="notif_${notifType.key}_soundVolume" min="0" max="100"
-                               value="${config.sound_volume ?? 100}" data-value-target="notif_${notifType.key}_soundVolumeValue">
+                               value="${escapeHtml(config.sound_volume ?? 100)}" data-value-target="notif_${notifType.key}_soundVolumeValue">
                         <span id="notif_${notifType.key}_soundVolumeValue">${config.sound_volume ?? 100}</span>
                     </div>
                 </div>

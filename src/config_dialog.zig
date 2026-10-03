@@ -147,7 +147,7 @@ fn mainImpl(init: std.process.Init) !void {
     displays.init(g_allocator, g_io);
 
     // Single-instance enforcement: if another instance already holds the mutex, focus its window and exit.
-    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-ConfigDialog-SingleInstance");
+    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Local\\EVE-Maj-Preview-ConfigDialog-SingleInstance");
     const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name);
     if (instance_mutex == null) {
         slog.err("Failed to create config dialog instance mutex", .{});
@@ -202,9 +202,11 @@ fn mainImpl(init: std.process.Init) !void {
         config_path = path;
     } else if (startup_settings) |s| {
         if (s.lastUsedProfile.len > 0) {
-            const profile_path = try std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, s.lastUsedProfile });
-            config_path = profile_path;
-            config_path_allocated = profile_path;
+            // An unsafe saved name (e.g. one planted through the protocol handler) falls back to the default profile.
+            if (config_mod.profilePath(allocator, s.lastUsedProfile)) |profile_path| {
+                config_path = profile_path;
+                config_path_allocated = profile_path;
+            } else |_| {}
         }
     }
 
@@ -609,9 +611,29 @@ fn getUpdateStatus(e: *webui.Event) void {
     e.returnString(result);
 }
 
+/// http(s) URL with a host and no control characters or whitespace (which ShellExecute could otherwise split into arguments).
+fn isWebUrl(url: []const u8) bool {
+    const rest = if (std.ascii.startsWithIgnoreCase(url, "https://"))
+        url["https://".len..]
+    else if (std.ascii.startsWithIgnoreCase(url, "http://"))
+        url["http://".len..]
+    else
+        return false;
+    if (rest.len == 0 or rest[0] == '/' or rest[0] == '\\') return false;
+    for (url) |c| {
+        if (c <= 0x20 or c == 0x7F) return false;
+    }
+    return true;
+}
+
 /// Opens a URL in the OS default browser rather than a WebView2 popup, which is what a plain `<a target="_blank">` would spawn instead.
 fn openUrlInBrowser(e: *webui.Event) void {
     const url = e.getString();
+    // ShellExecute would happily run executables, file:// or UNC paths and other protocol handlers; the page only ever needs web links.
+    if (!isWebUrl(url)) {
+        slog.warn("Refusing to open non-web URL: {s}", .{url});
+        return;
+    }
     var buf: [1024]u8 = undefined;
     const url_z = std.fmt.bufPrintZ(&buf, "{s}", .{url}) catch {
         slog.warn("URL too long to open in browser: {s}", .{url});
@@ -1608,6 +1630,24 @@ fn applyUltraPotatoMode(e: *webui.Event) void {
         return;
     }
 
+    // Only files a fresh scan finds under %LOCALAPPDATA%\CCP\EVE are patched; the page's list is just a selection among them, never a path to trust.
+    const known = ultra_potato.scanProfiles(allocator, g_io, config_mod.environMap()) catch |err| {
+        slog.warn("Failed to rescan EVE settings profiles: {}", .{err});
+        e.returnString("{\"success\": false, \"error\": \"Failed to apply\"}");
+        return;
+    };
+    defer ultra_potato.freeProfiles(allocator, known);
+    for (parsed.value) |requested| {
+        const found = for (known) |k| {
+            if (std.mem.eql(u8, k.path, requested)) break true;
+        } else false;
+        if (!found) {
+            slog.warn("Refusing Ultra Potato Mode on a path the scan didn't find: {s}", .{requested});
+            e.returnString("{\"success\": false, \"error\": \"Invalid request\"}");
+            return;
+        }
+    }
+
     const results = ultra_potato.applyToFiles(allocator, g_io, parsed.value) catch |err| {
         slog.err("Failed to apply Ultra Potato Mode: {}", .{err});
         e.returnString("{\"success\": false, \"error\": \"Failed to apply\"}");
@@ -1921,7 +1961,7 @@ fn switchProfile(e: *webui.Event) void {
     slog.debug("Switching to profile: {s}", .{profile_name});
 
     const allocator = g_allocator;
-    const new_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, profile_name }) catch {
+    const new_path = config_mod.profilePath(allocator, profile_name) catch {
         e.returnString("{\"success\": false, \"error\": \"Failed to allocate path\"}");
         return;
     };
@@ -1972,7 +2012,7 @@ fn createProfile(e: *webui.Event) void {
     };
     defer allocator.free(profile_filename);
 
-    const profile_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, profile_filename }) catch {
+    const profile_path = config_mod.profilePath(allocator, profile_filename) catch {
         e.returnString("{\"success\": false, \"error\": \"Memory allocation failed\"}");
         return;
     };
@@ -2006,7 +2046,7 @@ fn patchProfileAccentColor(allocator: std.mem.Allocator, filename: []const u8, a
 
     cfg.accentColor = accent_color;
 
-    const profile_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, filename }) catch |err| {
+    const profile_path = config_mod.profilePath(allocator, filename) catch |err| {
         slog.warn("Failed to allocate path to patch accent color for '{s}': {}", .{ filename, err });
         return;
     };
@@ -2058,7 +2098,7 @@ fn copyProfile(e: *webui.Event) void {
     else
         null;
 
-    const source_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, source_name }) catch {
+    const source_path = config_mod.profilePath(allocator, source_name) catch {
         e.returnString("{\"success\": false, \"error\": \"Memory allocation failed\"}");
         return;
     };
@@ -2070,7 +2110,7 @@ fn copyProfile(e: *webui.Event) void {
     };
     defer allocator.free(target_filename);
 
-    const target_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, target_filename }) catch {
+    const target_path = config_mod.profilePath(allocator, target_filename) catch {
         e.returnString("{\"success\": false, \"error\": \"Memory allocation failed\"}");
         return;
     };
@@ -2105,7 +2145,7 @@ fn deleteProfile(e: *webui.Event) void {
         return;
     }
 
-    const profile_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, profile_name }) catch {
+    const profile_path = config_mod.profilePath(allocator, profile_name) catch {
         e.returnString("{\"success\": false, \"error\": \"Memory allocation failed\"}");
         return;
     };
@@ -2160,7 +2200,7 @@ fn resetProfile(e: *webui.Event) void {
     const profile_name = e.getString();
     const allocator = g_allocator;
 
-    const profile_path = std.fs.path.join(allocator, &[_][]const u8{ config_mod.PROFILES_DIR, profile_name }) catch {
+    const profile_path = config_mod.profilePath(allocator, profile_name) catch {
         e.returnString("{\"success\": false, \"error\": \"Memory allocation failed\"}");
         return;
     };

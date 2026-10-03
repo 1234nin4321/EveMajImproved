@@ -80,7 +80,21 @@ fn openFallback(url: []const u8) void {
 }
 
 /// Uploads clipboard text to url via aDashboard's paste-intake form shape and opens the resulting page, falling back to opening the plain url if there's no clipboard text or the upload fails.
+/// The clipboard may hold anything (passwords included), so it's only ever sent over HTTPS to the one paste site this feature is for - checked here, not just in the config dialog that normally sets the URL.
+fn isAllowedUploadUrl(url: []const u8) bool {
+    const uri = std.Uri.parse(url) catch return false;
+    if (!std.ascii.eqlIgnoreCase(uri.scheme, "https")) return false;
+    var host_buf: [std.Io.net.HostName.max_len]u8 = undefined;
+    const host = uri.getHost(&host_buf) catch return false;
+    return std.ascii.eqlIgnoreCase(host.bytes, "adashboard.info");
+}
+
 fn uploadClipboardAndOpen(allocator: std.mem.Allocator, url: []const u8) void {
+    if (!isAllowedUploadUrl(url)) {
+        slog.warn("Not uploading clipboard to {s}: only https://adashboard.info is allowed", .{url});
+        openFallback(url);
+        return;
+    }
     const clipboard_text = win32.getClipboardText(allocator) orelse {
         slog.warn("Clipboard has no text; opening {s} without uploading", .{url});
         openFallback(url);

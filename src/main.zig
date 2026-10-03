@@ -645,7 +645,7 @@ fn mainImpl(init: std.process.Init) !void {
         }
     }
 
-    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Global\\EVE-Maj-Preview-SingleInstance");
+    const mutex_name = std.unicode.utf8ToUtf16LeStringLiteral("Local\\EVE-Maj-Preview-SingleInstance");
     const instance_mutex = win32.CreateMutexW(null, win32.TRUE, mutex_name);
 
     if (instance_mutex == null) {
@@ -922,6 +922,11 @@ fn mainImpl(init: std.process.Init) !void {
 
 /// Completely reinitializes all subsystems with a newly loaded profile's configuration.
 fn reloadWithProfile(new_profile_name: []const u8) !void {
+    // Names reach here from evemajpreview:// URLs and IPC; refuse anything that isn't a plain profile file name before it can be saved as the last-used profile.
+    if (!config_mod.isSafeProfileName(new_profile_name)) {
+        slog.warn("Ignoring profile switch to unsafe name '{s}'", .{new_profile_name});
+        return error.InvalidProfileName;
+    }
     slog.info("=== Starting profile reload: {s} ===", .{new_profile_name});
 
     const timer_hwnd = g_timer_hwnd orelse return error.NoTimerWindow;

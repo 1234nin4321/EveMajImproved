@@ -5,6 +5,7 @@ const vk = @import("virtual_keys.zig");
 const state_mod = @import("state.zig");
 const types = @import("types.zig");
 pub const display_grid = @import("display_grid.zig");
+const profile_name_mod = @import("profile_name.zig");
 const color = @import("color.zig");
 
 const slog = log.scoped("config");
@@ -31,6 +32,20 @@ pub const DEFAULT_PROFILE = "default.json";
 pub const GLOBAL_SETTINGS_FILE = "profiles/global.settings.json";
 pub const MAX_PROFILE_NAME_LEN: usize = 16;
 pub const DEFAULT_ACCENT_COLOR: u32 = 0xFFD9A441;
+
+/// Whether `name` is a plain "<name>.json" profile file name (see profile_name.zig); everything that turns a profile name into a path goes through profilePath, which enforces it.
+pub fn isSafeProfileName(name: []const u8) bool {
+    return profile_name_mod.isSafe(name);
+}
+
+/// PROFILES_DIR/<name>, refusing names that could address any other file. Caller frees.
+pub fn profilePath(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
+    if (!isSafeProfileName(name)) {
+        slog.warn("Rejected unsafe profile name '{s}'", .{name});
+        return error.InvalidProfileName;
+    }
+    return std.fs.path.join(allocator, &[_][]const u8{ PROFILES_DIR, name });
+}
 
 /// Truncates a user-supplied profile name to MAX_PROFILE_NAME_LEN; names are ASCII (enforced by the config dialog's input sanitization) so byte slicing is safe.
 pub fn clampProfileName(name: []const u8) []const u8 {
@@ -497,18 +512,17 @@ pub const GlobalSettings = struct {
                 slog.debug("No global settings file, using defaults", .{});
                 return GlobalSettings.fromWire(.{}, allocator);
             }
+            // Usually transient (a sharing violation while the other process swaps the file in, an AV or sync lock), so leave the file alone rather than destroying the user's hotkeys.
             slog.err("Failed to read global settings file: {}", .{err});
-            std.Io.Dir.cwd().deleteFile(g_io, GLOBAL_SETTINGS_FILE) catch |del_err| {
-                slog.warn("Failed to delete unreadable global settings file: {}", .{del_err});
-            };
             return GlobalSettings.fromWire(.{}, allocator);
         };
         defer allocator.free(content);
 
         const settings = loadFromJson(allocator, content) catch |err| {
-            slog.warn("Failed to parse global settings file ({}), using defaults and deleting corrupted file", .{err});
-            std.Io.Dir.cwd().deleteFile(g_io, GLOBAL_SETTINGS_FILE) catch |del_err| {
-                slog.warn("Failed to delete corrupted global settings file: {}", .{del_err});
+            // Kept as .corrupt (not deleted) so hand-edits or a newer version's file can be recovered.
+            slog.warn("Failed to parse global settings file ({}), using defaults and setting it aside as {s}.corrupt", .{ err, GLOBAL_SETTINGS_FILE });
+            std.Io.Dir.cwd().rename(GLOBAL_SETTINGS_FILE, std.Io.Dir.cwd(), GLOBAL_SETTINGS_FILE ++ ".corrupt", g_io) catch |rename_err| {
+                slog.warn("Failed to set aside corrupted global settings file: {}", .{rename_err});
             };
             return GlobalSettings.fromWire(.{}, allocator);
         };
@@ -3996,7 +4010,12 @@ pub const Config = struct {
     pub fn loadProfile(allocator: std.mem.Allocator, profile_name: []const u8) !Config {
         try ensureProfilesDir(allocator);
 
-        const profile_path = try std.fs.path.join(allocator, &[_][]const u8{ PROFILES_DIR, profile_name });
+        // DEFAULT_PROFILE is itself a safe name, so this can't recurse forever.
+        if (!isSafeProfileName(profile_name)) {
+            slog.warn("Refusing to load unsafe profile name '{s}', using default", .{profile_name});
+            return loadProfile(allocator, DEFAULT_PROFILE);
+        }
+        const profile_path = try profilePath(allocator, profile_name);
         defer allocator.free(profile_path);
 
         slog.info("Loading JSON config from: {s}", .{profile_path});
@@ -4835,7 +4854,7 @@ pub const Config = struct {
 
     /// Persists the entire config as JSON to this profile's file.
     pub fn saveCurrentProfile(self: *const Config, allocator: std.mem.Allocator) !void {
-        const profile_path = try std.fs.path.join(allocator, &[_][]const u8{ PROFILES_DIR, self.profile_name });
+        const profile_path = try profilePath(allocator, self.profile_name);
         defer allocator.free(profile_path);
         try saveToJsonFile(self, allocator, profile_path);
     }

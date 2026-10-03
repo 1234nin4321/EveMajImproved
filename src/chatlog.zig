@@ -164,6 +164,23 @@ pub const LogFileState = struct {
     }
 };
 
+const MAX_SYSTEM_NAME_LEN = 64;
+const SYSTEM_CHANGE_PREFIX = "EVE System > Channel changed to Local";
+
+/// True only when "EVE System" is the line's speaker (right after "[ timestamp ]"). Anyone in Local can type "EVE System > Channel changed to Local : Jita", but their line reads "[ ts ] Their Name > EVE System > ...", so a substring match alone would let them fake the victim's system.
+fn isSystemChangeLine(line: []const u8) bool {
+    const close = std.mem.indexOfScalar(u8, line, ']') orelse return false;
+    const body = std.mem.trimStart(u8, line[close + 1 ..], " \t");
+    return std.mem.startsWith(u8, body, SYSTEM_CHANGE_PREFIX);
+}
+
+test "isSystemChangeLine only trusts the EVE System speaker" {
+    try std.testing.expect(isSystemChangeLine("[ 2026.10.03 20:00:00 ] EVE System > Channel changed to Local : Jita"));
+    try std.testing.expect(!isSystemChangeLine("[ 2026.10.03 20:00:00 ] Hostile > EVE System > Channel changed to Local : Jita"));
+    try std.testing.expect(!isSystemChangeLine("[ 2026.10.03 20:00:00 ] Hostile > Channel changed to Local : Jita"));
+    try std.testing.expect(!isSystemChangeLine("EVE System > Channel changed to Local : Jita"));
+}
+
 pub const ChatlogMonitor = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -1222,8 +1239,8 @@ pub const ChatlogMonitor = struct {
 
         // Fast pre-filter: Check for relevant keywords before expensive parsing
         if (state.is_chatlog) {
-            // Chatlog: Look for "EVE System" (indicates "Channel changed to Local:")
-            if (std.mem.indexOf(u8, clean_line, "EVE System")) |_| {
+            // Chatlog: only the client's own "EVE System" speaker announces a system change.
+            if (isSystemChangeLine(clean_line)) {
                 if (try self.parseSystemChangeFromChat(state, clean_line)) |system| {
                     self.handleSystemChange(state, system, "chatlog");
                 }
@@ -1415,13 +1432,15 @@ pub const ChatlogMonitor = struct {
         const remaining = after_needle[dest_start..];
         const newline_pos = std.mem.indexOfAny(u8, remaining, "\r\n") orelse remaining.len;
         const system = std.mem.trim(u8, remaining[0..newline_pos], " \t");
+        // Real system names are short; anything longer is not one.
+        if (system.len == 0 or system.len > MAX_SYSTEM_NAME_LEN) return null;
 
         state.system_name_buffer.clearRetainingCapacity();
         try state.system_name_buffer.appendSlice(self.allocator, system);
         return state.system_name_buffer.items;
     }
 
-    /// Parse "Channel changed to Local : SystemName" from chatlog
+    /// Parse "Channel changed to Local : SystemName" from chatlog; callers must have checked isSystemChangeLine first.
     fn parseSystemChangeFromChat(self: *ChatlogMonitor, state: *LogFileState, line: []const u8) !?[]const u8 {
         return self.extractSystemAfterMarkers(state, line, "Channel changed to Local", ":");
     }
@@ -1488,15 +1507,17 @@ pub const ChatlogMonitor = struct {
         return (year * 10000 + month * 100 + day) * 1000000 + (hour * 10000 + minute * 100 + second);
     }
 
-    /// Extract system name from chatlog text (for initial state)
+    /// Extract system name from chatlog text (for initial state): the last genuine "EVE System" announcement, ignoring players who typed the same words.
     fn extractSystemFromChatlog(self: *ChatlogMonitor, state: *LogFileState, text: []const u8) !?SystemMatch {
         var last_pos: ?usize = null;
         var search_pos: usize = 0;
         const needle = "Channel changed to Local";
 
         while (std.mem.indexOfPos(u8, text, search_pos, needle)) |pos| {
-            last_pos = pos;
             search_pos = pos + 1;
+            const line_start = if (std.mem.lastIndexOfScalar(u8, text[0..pos], '\n')) |nl| nl + 1 else 0;
+            const line_end = std.mem.indexOfScalarPos(u8, text, pos, '\n') orelse text.len;
+            if (isSystemChangeLine(text[line_start..line_end])) last_pos = pos;
         }
 
         if (last_pos) |pos| {

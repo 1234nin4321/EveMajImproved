@@ -320,7 +320,19 @@ fn packVolume(volume_percent: u8) u32 {
 }
 
 /// Decodes and plays `path` (WAV/MP3), blocking until done; public so config.exe's "Test Sound" button can call it directly, bypassing the worker queue below.
+/// Media Foundation will open URLs and network shares too; a sound path from an imported profile pointing at \\\\host\\share would leak the user's NTLM credentials to that host, so only local files are played.
+pub fn isLocalSoundPath(path: []const u8) bool {
+    if (path.len < 3) return false;
+    if (std.mem.indexOf(u8, path, "://") != null) return false;
+    if ((path[0] == '\\' or path[0] == '/') and (path[1] == '\\' or path[1] == '/')) return false;
+    return true;
+}
+
 pub fn playBlocking(allocator: std.mem.Allocator, path: []const u8, volume_percent: u8) !void {
+    if (!isLocalSoundPath(path)) {
+        slog.warn("Refusing to play non-local sound path: {s}", .{path});
+        return error.NonLocalSoundPath;
+    }
     const path_w = try std.unicode.utf8ToUtf16LeAllocZ(allocator, path);
     defer allocator.free(path_w);
 
@@ -446,6 +458,10 @@ fn ensureWorker() bool {
 
 /// Queue a sound alert; returns immediately and plays in full FIFO order on the lazily-started worker thread.
 pub fn playAlert(path: []const u8, volume_percent: u8) void {
+    if (!isLocalSoundPath(path)) {
+        slog.warn("Refusing to play non-local sound path: {s}", .{path});
+        return;
+    }
     if (!ensureWorker()) return;
     const copy = std.heap.page_allocator.dupe(u8, path) catch |err| {
         slog.warn("Failed to queue sound alert: {}", .{err});
