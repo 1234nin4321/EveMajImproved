@@ -370,17 +370,9 @@
                                 <span class="label-body" data-i18n="field.hideThumbnailsDuringRegionSelect.label">Hide Thumbnails During Region Selection</span>
                             </label>
                             <p class="hint hint-extra" data-i18n="field.hideThumbnailsDuringRegionSelect.hint">Temporarily hides visible thumbnails so they don't cover the drag-to-select overlay.</p>
+                            <div id="thumbnailRegionsList" class="thumbnail-regions-list"></div>
                             <div class="button-row-flex">
-                                <button type="button" onclick="startRegionSelectFlow(REGION_FIELD_IDS)" data-i18n="field.newRegion.button">▭ New Thumbnail Region</button>
-                                <button type="button" id="editRegionButton" onclick="startRegionSelectFlow(REGION_FIELD_IDS, true)" data-i18n="field.editRegion.button" disabled>✎ Edit Region</button>
-                                <button type="button" id="clearRegionButton" class="button-icon button-icon-danger" onclick="confirmRemove('clearRegionButton', () => clearRegion(REGION_FIELD_IDS), '✓')" title="Clear region" data-i18n-title="field.clearRegion.title" disabled>&times;</button>
-                            </div>
-                            <div id="displayRegionsBlock" class="display-regions-block" style="display: none;">
-                                <div class="display-regions-block-text">
-                                    <span class="display-regions-block-title" data-i18n="field.displayRegions.title">Display Regions</span>
-                                    <span id="displayRegionsSummary" class="display-regions-block-summary"></span>
-                                </div>
-                                <button type="button" onclick="openDisplayRegionsModal()" data-i18n="button.manage-display-regions.label">▦ Manage Display Regions</button>
+                                <button type="button" onclick="addThumbnailRegionFlow()" data-i18n="field.newRegion.button">▭ New Thumbnail Region</button>
                             </div>
                             <!-- Bound via CONFIG_SCHEMA; not something a user needs to see or edit. -->
                             <div class="binding-list" style="display: none;">
@@ -2798,10 +2790,8 @@
     <div id="display-regions-modal" class="modal">
         <div class="modal-content modal-wide">
             <h3 data-i18n="misc.display-regions-heading">Display Regions</h3>
-            <p class="display-regions-intro" data-i18n="misc.display-regions-pick-display">Pick a display, then choose how to split it. Each display can have its own grid.</p>
-            <div id="displayRegionsDisplayDiagram" class="display-diagram display-regions-display-diagram"></div>
             <p id="displayRegionsSubtitle" class="display-regions-subtitle"></p>
-            <label class="display-regions-fit">
+            <label class="display-regions-fit" id="displayRegionsUseWorkAreaRow">
                 <input type="checkbox" id="displayRegionsUseWorkArea" data-untracked checked>
                 <span class="label-body" data-i18n="field.regionDisplayUseWorkArea.label">Leave Room for the Taskbar</span>
             </label>

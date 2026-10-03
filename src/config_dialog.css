@@ -3681,3 +3681,47 @@ button.confirm-delete:hover {
     font-size: var(--fs-micro);
     color: var(--color-accent);
 }
+
+/* Thumbnail Space region list */
+.thumbnail-regions-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+    margin: var(--space-2) 0;
+}
+
+.thumbnail-region-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-1) var(--space-2);
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+}
+
+.thumbnail-region-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.thumbnail-region-name {
+    color: var(--color-text);
+    font-weight: var(--fw-medium);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thumbnail-region-meta {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.thumbnail-region-row > button:not(.button-icon) {
+    flex: none;
+    white-space: nowrap;
+}

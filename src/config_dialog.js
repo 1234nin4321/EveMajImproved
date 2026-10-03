@@ -1556,7 +1556,7 @@ function refreshRegionButtons() {
             if (button) button.disabled = disabled;
         }
     }
-    updateDisplayRegionsBlock();
+    renderThumbnailRegionsList();
 }
 
 function clearRegion(fieldIds) {
@@ -1569,15 +1569,12 @@ function clearRegion(fieldIds) {
     scheduleThumbnailPreview();
 }
 
-// ---- Display Regions: one grid per display (see display_grid.zig) ----
+// ---- Thumbnail regions: the Thumbnail Space as a list of regions (full displays or drawn), each with its own grid (see display_grid.zig) ----
 const DISPLAY_REGION_KINDS = ['Empty', 'EveryoneElse', 'Custom', 'Client', 'Account'];
 const DISPLAY_REGIONS_MAX_DIM = 8;
 let displayRegionsDisplays = null;
-// Per-display drafts while the dialog is open, keyed by display id; displayRegionsDraft is the one being edited.
-let displayRegionsDrafts = new Map();
+// The region being edited in the Display Regions dialog.
 let displayRegionsDraft = null;
-// Saved layouts for displays not connected right now - carried through Apply untouched.
-let displayRegionsDetached = [];
 let displayRegionsSelectedCell = 0;
 // True while the Custom split is chosen, so its inputs stay visible even when the numbers happen to match a preset.
 let displayRegionsCustomMode = false;
@@ -1595,18 +1592,12 @@ function currentDisplayGrid() {
 }
 
 function currentDisplayLayouts() {
-    const layouts = currentConfig?.display?.displayLayouts;
-    return Array.isArray(layouts) ? layouts : [];
+    if (!currentConfig?.display) return [];
+    if (!Array.isArray(currentConfig.display.displayLayouts)) currentConfig.display.displayLayouts = [];
+    return currentConfig.display.displayLayouts;
 }
 
-function activeDisplayLayouts() {
-    return currentDisplayLayouts().filter(l => {
-        const d = displayGridDims(l.grid);
-        return d.columns && d.rows && l.width > 0 && l.height > 0;
-    });
-}
-
-// The display the Thumbnail Space region exactly covers (full bounds or work area), if any.
+// The display the Thumbnail Space region exactly covers (full bounds or work area), if any; used by the region chooser's default selection.
 function displayMatchingRegion(displays) {
     const r = currentRegionValues(REGION_FIELD_IDS);
     if (!r || !displays) return null;
@@ -1620,15 +1611,10 @@ async function fetchDisplaysForRegions(force = false) {
     try {
         displayRegionsDisplays = JSON.parse(await webui.call('getDisplays')).displays || [];
     } catch (error) {
-        logWarn('Failed to load displays for Display Regions:', error);
+        logWarn('Failed to load displays for thumbnail regions:', error);
         displayRegionsDisplays = null;
     }
     return displayRegionsDisplays;
-}
-
-function gridDimsLabel(grid) {
-    const { columns, rows } = displayGridDims(grid);
-    return `${columns}×${rows}`;
 }
 
 function displayGridSummary(grid) {
@@ -1644,24 +1630,144 @@ function displayGridSummary(grid) {
     return grid.fitToGrid ? `${summary} · ${t('field.displayRegionsFitToGrid.label')}` : summary;
 }
 
-// Lives inside Region Fit's options, so it's available whenever Region Fit is on; the summary names each set-up display.
-async function updateDisplayRegionsBlock() {
-    const block = document.getElementById('displayRegionsBlock');
-    if (!block) return;
-    block.style.display = '';
-    const summary = document.getElementById('displayRegionsSummary');
-    if (!summary) return;
-    const layouts = activeDisplayLayouts();
-    if (layouts.length) {
-        const displays = await fetchDisplaysForRegions();
-        summary.textContent = layouts.map(l => {
-            const d = displays?.find(x => x.id === l.displayId);
-            const label = d ? t('dynamic.displayRegions.displayLabel').replace('{n}', String(d.number)) : t('dynamic.displayRegions.disconnected');
-            return `${label}: ${gridDimsLabel(l.grid)}`;
-        }).join(' · ');
+function anyLayoutHasCatchAll(exceptIndex = -1) {
+    return currentDisplayLayouts().some((l, i) => {
+        if (i === exceptIndex) return false;
+        const { columns, rows } = displayGridDims(l.grid);
+        return (l.grid?.slots || []).slice(0, columns * rows).some(s => s.kind === 'EveryoneElse');
+    });
+}
+
+// A new region is one auto-fit cell: a catch-all if nothing else catches unclaimed characters yet, else empty until the user assigns it.
+function newRegionGrid() {
+    return { size: 1, columns: 1, rows: 1, fitToGrid: false, slots: [{ kind: anyLayoutHasCatchAll() ? 'Empty' : 'EveryoneElse', account: null, characters: [] }] };
+}
+
+// Before thumbnail regions were a list, the Thumbnail Space was one region (regionX..) with an optional single grid. Fold that into the list on load - same placement in the main app (one auto-fit cell, or the old grid) - so there's only one model to edit.
+function migrateLegacyThumbnailSpace() {
+    if (!currentConfig?.display) return;
+    const layouts = currentDisplayLayouts();
+    const region = currentRegionValues(REGION_FIELD_IDS);
+    if (layouts.length || !region) return;
+    const legacy = currentDisplayGrid();
+    const dims = displayGridDims(legacy);
+    layouts.push({
+        displayId: '',
+        x: region[0], y: region[1], width: region[2], height: region[3],
+        useWorkArea: false,
+        grid: dims.columns && dims.rows
+            ? { ...legacy, size: dims.columns === dims.rows ? dims.columns : 0, columns: dims.columns, rows: dims.rows }
+            : { size: 1, columns: 1, rows: 1, fitToGrid: false, slots: [{ kind: 'EveryoneElse', account: null, characters: [] }] },
+    });
+    for (const id of [REGION_FIELD_IDS.x, REGION_FIELD_IDS.y, REGION_FIELD_IDS.width, REGION_FIELD_IDS.height]) {
+        setFieldValue(id, null);
+        currentConfig.display[id] = null;
+    }
+    currentConfig.display.displayGrid = { size: 0, columns: 0, rows: 0, fitToGrid: false, slots: [] };
+    // Label it as a display once we know whether it exactly covers one.
+    fetchDisplaysForRegions().then(displays => {
+        const layout = layouts[0];
+        const match = displays?.find(d => {
+            const same = (r) => r.x === layout.x && r.y === layout.y && r.width === layout.width && r.height === layout.height;
+            return same(d.bounds) || same(d.workArea);
+        });
+        if (match && !layout.displayId) {
+            layout.displayId = match.id;
+            layout.useWorkArea = match.workArea.width === layout.width && match.workArea.height === layout.height && match.workArea.x === layout.x && match.workArea.y === layout.y;
+            renderThumbnailRegionsList();
+        }
+    });
+}
+
+function layoutDisplay(layout, displays) {
+    return layout.displayId ? displays?.find(d => d.id === layout.displayId) || null : null;
+}
+
+function layoutName(layout, displays) {
+    if (!layout.displayId) return t('dynamic.thumbnailRegions.drawnName');
+    const d = layoutDisplay(layout, displays);
+    return d ? `${t('dynamic.displayRegions.displayLabel').replace('{n}', String(d.number))} · ${d.name}` : t('dynamic.displayRegions.disconnected');
+}
+
+async function renderThumbnailRegionsList() {
+    const list = document.getElementById('thumbnailRegionsList');
+    if (!list) return;
+    const layouts = currentDisplayLayouts();
+    if (layouts.length === 0) {
+        list.innerHTML = `<p class="account-empty">${escapeHtml(t('field.thumbnailRegions.empty'))}</p>`;
         return;
     }
-    summary.textContent = displayGridSummary(currentDisplayGrid());
+    const displays = await fetchDisplaysForRegions();
+    list.innerHTML = layouts.map((layout, i) => {
+        const d = layoutDisplay(layout, displays);
+        const badge = layout.displayId ? (d ? String(d.number) : '?') : '▭';
+        const meta = [
+            t('dynamic.thumbnailRegions.meta').replace('{w}', String(layout.width)).replace('{h}', String(layout.height)).replace('{x}', String(layout.x)).replace('{y}', String(layout.y)),
+            displayGridSummary(layout.grid || {}),
+        ];
+        return `
+            <div class="thumbnail-region-row">
+                <span class="display-card-number">${escapeHtml(badge)}</span>
+                <div class="thumbnail-region-info">
+                    <div class="thumbnail-region-name">${escapeHtml(layoutName(layout, displays))}</div>
+                    <div class="thumbnail-region-meta">${escapeHtml(meta.join(' · '))}</div>
+                </div>
+                <button type="button" onclick="openDisplayRegionsModal(${i})" title="${escapeHtml(t('field.thumbnailRegions.gridTitle'))}">${escapeHtml(t('button.thumbnailRegions.grid'))}</button>
+                ${layout.displayId ? '' : `<button type="button" class="button-icon" onclick="editThumbnailRegion(${i})" title="${escapeHtml(t('field.thumbnailRegions.editTitle'))}">✎</button>`}
+                <button type="button" id="thumbRegion_${i}_removeBtn" class="button-icon button-icon-danger" onclick="confirmRemove('thumbRegion_${i}_removeBtn', () => removeThumbnailRegion(${i}), '✓')" title="${escapeHtml(t('field.thumbnailRegions.removeTitle'))}">&times;</button>
+            </div>`;
+    }).join('');
+}
+
+function thumbnailRegionsChanged(statusText) {
+    markAsChanged();
+    scheduleThumbnailPreview();
+    renderThumbnailRegionsList();
+    if (statusText) showStatus(statusText, 'success');
+}
+
+// New Thumbnail Region always adds to the list: a full display (once per display) or a drawn rectangle.
+async function addThumbnailRegionFlow() {
+    if (typeof webui === 'undefined' || regionSelectPollTimer) return;
+    const choice = await showRegionModeModal();
+    if (!choice) return;
+    const layouts = currentDisplayLayouts();
+    const displays = await fetchDisplaysForRegions(true);
+
+    if (choice.mode === 'display') {
+        const existing = layouts.findIndex(l => l.displayId === choice.displayId);
+        const display = displays?.find(d => d.id === choice.displayId);
+        const name = display ? t('dynamic.displayRegions.displayLabel').replace('{n}', String(display.number)) : '';
+        if (existing >= 0) {
+            showStatus(t('status.thumbnailRegionExists').replace('{name}', name), 'info');
+            openDisplayRegionsModal(existing);
+            return;
+        }
+        layouts.push({ displayId: choice.displayId, ...choice.rect, useWorkArea: choice.useWorkArea, grid: newRegionGrid() });
+        thumbnailRegionsChanged(t('status.thumbnailRegionAdded').replace('{name}', name));
+        return;
+    }
+
+    const rect = await runRegionOverlay(REGION_FIELD_IDS.hideThumbnails, null);
+    if (!rect) return;
+    layouts.push({ displayId: '', x: rect.x, y: rect.y, width: rect.width, height: rect.height, useWorkArea: false, grid: newRegionGrid() });
+    thumbnailRegionsChanged(t('status.thumbnailRegionAdded').replace('{name}', t('dynamic.thumbnailRegions.drawnName')));
+}
+
+async function editThumbnailRegion(index) {
+    const layout = currentDisplayLayouts()[index];
+    if (!layout || layout.displayId) return;
+    const rect = await runRegionOverlay(REGION_FIELD_IDS.hideThumbnails, [layout.x, layout.y, layout.width, layout.height]);
+    if (!rect) return;
+    Object.assign(layout, { x: rect.x, y: rect.y, width: rect.width, height: rect.height });
+    thumbnailRegionsChanged(t('status.regionSet'));
+}
+
+function removeThumbnailRegion(index) {
+    const layouts = currentDisplayLayouts();
+    if (!layouts[index]) return;
+    layouts.splice(index, 1);
+    thumbnailRegionsChanged(t('status.thumbnailRegionRemoved'));
 }
 
 function displayRegionCharacterNames() {
@@ -1682,22 +1788,14 @@ function normalizeDisplayRegionSlot(slot) {
     };
 }
 
-function newDisplayRegionsDraft(display, grid, useWorkArea) {
-    const dims = displayGridDims(grid);
-    return {
-        display,
-        useWorkArea: useWorkArea !== false,
-        columns: dims.columns,
-        rows: dims.rows,
-        fitToGrid: !!grid?.fitToGrid,
-        slots: (grid?.slots || []).map(normalizeDisplayRegionSlot),
-    };
-}
-
-// The area this draft's grid splits: the display's work area or full bounds.
+// The area this region's grid splits: a connected display's work area or full bounds, else the region's stored rect (drawn, or a display that's unplugged right now).
 function displayRegionsDraftRect(draft) {
-    const r = draft.useWorkArea ? draft.display.workArea : draft.display.bounds;
-    return [r.x, r.y, r.width, r.height];
+    if (draft.display) {
+        const r = draft.useWorkArea ? draft.display.workArea : draft.display.bounds;
+        return [r.x, r.y, r.width, r.height];
+    }
+    const l = draft.layout;
+    return [l.x, l.y, l.width, l.height];
 }
 
 function clampDisplayRegionsDim(value) {
@@ -1712,9 +1810,8 @@ function setDisplayRegionsDims(columns, rows) {
     const cells = columns * rows;
     const slots = draft.slots.slice();
     while (slots.length < cells) slots.push({ kind: 'Empty', account: null, characters: [] });
-    // A fresh grid starts with a catch-all, so nothing disappears the moment it's switched on - unless another display already has one.
-    const otherCatchAll = [...displayRegionsDrafts.values()].some(d => d !== draft && d.columns && d.rows && d.slots.slice(0, d.columns * d.rows).some(s => s.kind === 'EveryoneElse'));
-    if (wasOff && cells && !otherCatchAll && slots.slice(0, cells).every(s => s.kind === 'Empty')) slots[0] = { kind: 'EveryoneElse', account: null, characters: [] };
+    // A fresh grid starts with a catch-all, so nothing disappears the moment it's switched on - unless another region already has one.
+    if (wasOff && cells && !anyLayoutHasCatchAll(draft.index) && slots.slice(0, cells).every(s => s.kind === 'Empty')) slots[0] = { kind: 'EveryoneElse', account: null, characters: [] };
     draft.columns = columns;
     draft.rows = rows;
     draft.slots = slots;
@@ -1739,15 +1836,6 @@ function onDisplayRegionsCustomInput() {
     const columns = clampDisplayRegionsDim(document.getElementById('displayRegionsColumns')?.value);
     const rows = clampDisplayRegionsDim(document.getElementById('displayRegionsRows')?.value);
     setDisplayRegionsDims(columns, rows);
-}
-
-function selectDisplayRegionsDisplay(number) {
-    const draft = [...displayRegionsDrafts.values()].find(d => d.display.number === number);
-    if (!draft || draft === displayRegionsDraft) return;
-    displayRegionsDraft = draft;
-    displayRegionsSelectedCell = 0;
-    displayRegionsCustomMode = !!draft.columns && !(draft.columns === draft.rows && draft.columns <= 4);
-    renderDisplayRegionsModal();
 }
 
 // Mirrors display_grid.cellRect: the area minus the spacing gaps, split evenly.
@@ -1789,39 +1877,15 @@ function displayRegionCellLabel(slot) {
     }
 }
 
-function renderDisplayRegionsDisplayPicker() {
-    const container = document.getElementById('displayRegionsDisplayDiagram');
-    if (!container) return;
-    const displays = [...displayRegionsDrafts.values()].map(d => d.display);
-    const xs = displays.map(d => d.bounds.x), ys = displays.map(d => d.bounds.y);
-    const rs = displays.map(d => d.bounds.x + d.bounds.width), bs = displays.map(d => d.bounds.y + d.bounds.height);
-    const desktop = { x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...rs) - Math.min(...xs), height: Math.max(...bs) - Math.min(...ys) };
-    renderDisplayDiagram(container, { displays, desktop }, displayRegionsDraft.display.number, 'selectDisplayRegionsDisplay', 130);
-    // Badge every display that has a grid, so it's clear which ones are set up.
-    for (const draft of displayRegionsDrafts.values()) {
-        if (!draft.columns || !draft.rows) continue;
-        const tile = container.querySelector(`[data-display-number="${draft.display.number}"]`);
-        if (!tile) continue;
-        tile.classList.add('has-layout');
-        const badge = document.createElement('span');
-        badge.className = 'display-tile-layout';
-        badge.textContent = `${draft.columns}×${draft.rows}`;
-        tile.appendChild(badge);
-    }
-}
-
 function renderDisplayRegionsModal() {
     const draft = displayRegionsDraft;
     if (!draft) return;
-    renderDisplayRegionsDisplayPicker();
 
     const rect = displayRegionsDraftRect(draft);
     const subtitle = document.getElementById('displayRegionsSubtitle');
-    if (subtitle) {
-        subtitle.textContent = t('dynamic.displayRegions.subtitle')
-            .replace('{n}', String(draft.display.number)).replace('{name}', draft.display.name)
-            .replace('{w}', String(rect[2])).replace('{h}', String(rect[3]));
-    }
+    if (subtitle) subtitle.textContent = `${draft.name} · ${rect[2]} × ${rect[3]}`;
+    const workRow = document.getElementById('displayRegionsUseWorkAreaRow');
+    if (workRow) workRow.style.display = draft.display ? '' : 'none';
     const workBox = document.getElementById('displayRegionsUseWorkArea');
     if (workBox) workBox.checked = draft.useWorkArea;
 
@@ -1956,50 +2020,27 @@ function goToAccountConfigFromRegions() {
     switchTab('accounts');
 }
 
-// One draft per connected display, seeded from the saved per-display layouts - or, the first time, from a v1.3.0 single grid on whichever display the Thumbnail Space covers.
-function buildDisplayRegionsDrafts(displays) {
-    displayRegionsDrafts = new Map();
-    const layouts = currentDisplayLayouts();
-    displayRegionsDetached = layouts.filter(l => !displays.some(d => d.id === l.displayId));
-    for (const display of displays) {
-        const layout = layouts.find(l => l.displayId === display.id);
-        displayRegionsDrafts.set(display.id, newDisplayRegionsDraft(display, layout?.grid, layout ? layout.useWorkArea : true));
-    }
-    const legacy = currentDisplayGrid();
-    const legacyDims = displayGridDims(legacy);
-    if (!layouts.length && legacyDims.columns && legacyDims.rows) {
-        const match = displayMatchingRegion(displays);
-        if (match) {
-            const r = currentRegionValues(REGION_FIELD_IDS);
-            const onWorkArea = r && match.workArea.x === r[0] && match.workArea.y === r[1] && match.workArea.width === r[2] && match.workArea.height === r[3];
-            displayRegionsDrafts.set(match.id, newDisplayRegionsDraft(match, legacy, onWorkArea));
-        }
-    }
-}
-
-async function openDisplayRegionsModal() {
+// Edits one thumbnail region's grid (the list in Thumbnail Space picks which).
+async function openDisplayRegionsModal(index) {
+    const layout = currentDisplayLayouts()[index];
+    if (!layout) return;
     const displays = await fetchDisplaysForRegions(true);
-    if (!displays || displays.length === 0) {
-        showStatus(t('status.displaysLoadFailed'), 'error');
-        return;
-    }
-    buildDisplayRegionsDrafts(displays);
-    const drafts = [...displayRegionsDrafts.values()];
-    const regionDisplay = displayMatchingRegion(displays);
-    displayRegionsDraft = drafts.find(d => d.columns && d.rows)
-        || (regionDisplay && displayRegionsDrafts.get(regionDisplay.id))
-        || drafts.find(d => d.display.primary)
-        || drafts[0];
+    const display = layoutDisplay(layout, displays);
+    const dims = displayGridDims(layout.grid);
+    displayRegionsDraft = {
+        index,
+        layout,
+        display,
+        name: layoutName(layout, displays),
+        useWorkArea: layout.useWorkArea !== false,
+        columns: dims.columns,
+        rows: dims.rows,
+        fitToGrid: !!layout.grid?.fitToGrid,
+        slots: (layout.grid?.slots || []).map(normalizeDisplayRegionSlot),
+    };
     displayRegionsSelectedCell = 0;
-    displayRegionsCustomMode = !!displayRegionsDraft.columns && !(displayRegionsDraft.columns === displayRegionsDraft.rows && displayRegionsDraft.columns <= 4);
-    for (const d of drafts) {
-        if (d.columns && d.rows) {
-            const active = displayRegionsDraft;
-            displayRegionsDraft = d;
-            setDisplayRegionsDims(d.columns, d.rows);
-            displayRegionsDraft = active;
-        }
-    }
+    displayRegionsCustomMode = !!dims.columns && !(dims.columns === dims.rows && dims.columns <= 4);
+    if (dims.columns && dims.rows) setDisplayRegionsDims(dims.columns, dims.rows);
 
     const modal = document.getElementById('display-regions-modal');
     const applyBtn = document.getElementById('display-regions-apply');
@@ -2036,30 +2077,18 @@ async function openDisplayRegionsModal() {
         workBox?.removeEventListener('change', onWork);
     };
     const onApply = () => {
-        const layouts = [];
-        for (const draft of displayRegionsDrafts.values()) {
-            const { columns, rows } = draft;
-            if (!columns || !rows) continue;
-            const rect = displayRegionsDraftRect(draft);
-            layouts.push({
-                displayId: draft.display.id,
-                x: rect[0], y: rect[1], width: rect[2], height: rect[3],
-                useWorkArea: draft.useWorkArea,
-                grid: {
-                    size: columns === rows ? columns : 0, columns, rows,
-                    fitToGrid: !!draft.fitToGrid,
-                    slots: draft.slots.slice(0, columns * rows).map(normalizeDisplayRegionSlot),
-                },
-            });
-        }
-        currentConfig.display.displayLayouts = [...layouts, ...displayRegionsDetached];
-        // Per-display layouts supersede the v1.3.0 single grid, which is now migrated into them.
-        currentConfig.display.displayGrid = { size: 0, columns: 0, rows: 0, fitToGrid: false, slots: [] };
+        const draft = displayRegionsDraft;
+        const { columns, rows } = draft;
+        const rect = displayRegionsDraftRect(draft);
+        Object.assign(draft.layout, {
+            x: rect[0], y: rect[1], width: rect[2], height: rect[3],
+            useWorkArea: draft.display ? draft.useWorkArea : draft.layout.useWorkArea,
+            grid: columns && rows
+                ? { size: columns === rows ? columns : 0, columns, rows, fitToGrid: !!draft.fitToGrid, slots: draft.slots.slice(0, columns * rows).map(normalizeDisplayRegionSlot) }
+                : { size: 0, columns: 0, rows: 0, fitToGrid: false, slots: [] },
+        });
         finish();
-        markAsChanged();
-        scheduleThumbnailPreview();
-        updateDisplayRegionsBlock();
-        showStatus(t('status.displayRegionsApplied'), 'success');
+        thumbnailRegionsChanged(t('status.displayRegionsApplied'));
     };
     const onCancel = () => finish();
     applyBtn.addEventListener('click', onApply);
@@ -2116,9 +2145,9 @@ function showRegionModeModal() {
         const onConfirm = () => {
             const d = regionPickerData?.displays?.find(x => x.number === regionPickerSelected);
             if (!d) return;
-            const useWork = document.getElementById('regionDisplayUseWorkArea')?.checked;
+            const useWork = !!document.getElementById('regionDisplayUseWorkArea')?.checked;
             const r = useWork ? d.workArea : d.bounds;
-            finish({ mode: 'display', number: d.number, rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
+            finish({ mode: 'display', number: d.number, displayId: d.id, useWorkArea: useWork, rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
         };
 
         buttons.draw.addEventListener('click', onDraw);
@@ -2191,7 +2220,57 @@ function applyRegionValues(fieldIds, rect) {
     scheduleThumbnailPreview();
 }
 
-// fieldIds let the same overlay feed either RegionFit or notLoggedInSpace; edit adjusts the existing region's borders instead of dragging a new one. A new region first asks whether to draw one or use a whole display.
+// Runs the main app's drag/edit overlay and resolves to the chosen {x, y, width, height}, or null if cancelled/failed. editRect ([x, y, w, h]) adjusts an existing region instead of dragging a new one.
+async function runRegionOverlay(hideFieldId, editRect) {
+    if (typeof webui === 'undefined' || regionSelectPollTimer) return null;
+    try {
+        const request = {
+            hide: !!document.getElementById(hideFieldId)?.checked,
+            region: editRect || null,
+            // The overlay lives in the main app, which has no language files, so it gets its text from here.
+            labels: {
+                save: t('button.save-configuration.label'),
+                cancel: t('common.cancel'),
+                hintNew: t('overlay.regionHintNew'),
+                hintEdit: t('overlay.regionHintEdit'),
+                hintConfirm: t('overlay.regionHintConfirm'),
+            },
+        };
+        const { success, error } = JSON.parse(await webui.call('startRegionSelect', JSON.stringify(request)));
+        if (!success) {
+            showStatus(t('status.regionSelectFailedPrefix') + (error || ''), 'error');
+            return null;
+        }
+    } catch (err) {
+        logWarn('Failed to start region select:', err);
+        showStatus(t('status.regionSelectFailedPrefix') + err, 'error');
+        return null;
+    }
+
+    return new Promise((resolve) => {
+        const startedAt = Date.now();
+        regionSelectPollTimer = setInterval(async () => {
+            if (Date.now() - startedAt > REGION_SELECT_TIMEOUT_MS) {
+                stopRegionSelectPolling();
+                resolve(null);
+                return;
+            }
+            try {
+                const result = JSON.parse(await webui.call('pollRegionSelectResult'));
+                if (!result.done) return;
+                stopRegionSelectPolling();
+                if (result.tooSmall) showStatus(t('status.regionSelectTooSmall'), 'info');
+                resolve(result.cancelled ? null : { x: result.x, y: result.y, width: result.width, height: result.height });
+            } catch (err) {
+                logWarn('Failed to poll region select result:', err);
+                stopRegionSelectPolling();
+                resolve(null);
+            }
+        }, REGION_SELECT_POLL_MS);
+    });
+}
+
+// Single-region spaces (the Not-Logged-In space) fill fieldIds; edit adjusts the existing region instead of dragging a new one, and a new one first asks whether to draw it or use a whole display. The main Thumbnail Space is a list instead - see addThumbnailRegionFlow.
 async function startRegionSelectFlow(fieldIds, edit = false) {
     if (typeof webui === 'undefined' || regionSelectPollTimer) return;
 
@@ -2205,54 +2284,12 @@ async function startRegionSelectFlow(fieldIds, edit = false) {
         }
     }
 
-    try {
-        const regionToEdit = edit ? currentRegionValues(fieldIds) : null;
-        if (edit && !regionToEdit) return;
-        const request = {
-            hide: !!document.getElementById(fieldIds.hideThumbnails)?.checked,
-            region: regionToEdit,
-            // The overlay lives in the main app, which has no language files, so it gets its text from here.
-            labels: {
-                save: t('button.save-configuration.label'),
-                cancel: t('common.cancel'),
-                hintNew: t('overlay.regionHintNew'),
-                hintEdit: t('overlay.regionHintEdit'),
-                hintConfirm: t('overlay.regionHintConfirm'),
-            },
-        };
-        const { success, error } = JSON.parse(await webui.call('startRegionSelect', JSON.stringify(request)));
-        if (!success) {
-            showStatus(t('status.regionSelectFailedPrefix') + (error || ''), 'error');
-            return;
-        }
-    } catch (err) {
-        logWarn('Failed to start region select:', err);
-        showStatus(t('status.regionSelectFailedPrefix') + err, 'error');
-        return;
-    }
-
-    const startedAt = Date.now();
-    regionSelectPollTimer = setInterval(async () => {
-        if (Date.now() - startedAt > REGION_SELECT_TIMEOUT_MS) {
-            stopRegionSelectPolling();
-            return;
-        }
-
-        try {
-            const result = JSON.parse(await webui.call('pollRegionSelectResult'));
-            if (!result.done) return;
-
-            stopRegionSelectPolling();
-            if (result.tooSmall) showStatus(t('status.regionSelectTooSmall'), 'info');
-            if (result.cancelled) return;
-
-            applyRegionValues(fieldIds, result);
-            showStatus(t('status.regionSet'), 'success');
-        } catch (err) {
-            logWarn('Failed to poll region select result:', err);
-            stopRegionSelectPolling();
-        }
-    }, REGION_SELECT_POLL_MS);
+    const regionToEdit = edit ? currentRegionValues(fieldIds) : null;
+    if (edit && !regionToEdit) return;
+    const rect = await runRegionOverlay(fieldIds.hideThumbnails, regionToEdit);
+    if (!rect) return;
+    applyRegionValues(fieldIds, rect);
+    showStatus(t('status.regionSet'), 'success');
 }
 
 async function loadAppVersion() {
@@ -2357,6 +2394,7 @@ function populateFormFields() {
     toggleSnappingOptions();
     toggleRegionFitOptions();
     toggleNotLoggedInSpaceOptions();
+    migrateLegacyThumbnailSpace();
     refreshRegionButtons();
     toggleNotifInfoPanelOptions();
     toggleShiftClickExcludeOptions();
