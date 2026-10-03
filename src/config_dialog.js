@@ -72,6 +72,7 @@ function refreshDynamicSections() {
     saveProfileSwitchHotkeys();
     saveAppHotkeys();
     saveUrlHotkeys();
+    saveAccountKeyBindings();
     saveOreTable();
 
     populateWindowFilters();
@@ -82,6 +83,7 @@ function refreshDynamicSections() {
     populateProfileSwitchHotkeys();
     populateAppHotkeys();
     populateUrlHotkeys();
+    populateAccountKeyBindings();
     populateOreTable();
     renderHotkeyBindings();
 }
@@ -1347,6 +1349,10 @@ function switchTab(panelId) {
     if (panelId === 'characters') alignDetailPanelNameLabel('charactersList');
     // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
     if (panelId === 'accounts' && !accountScanStarted) scanEveAccounts();
+    if (panelId === 'key-bindings') {
+        saveAccountKeyBindings();
+        populateAccountKeyBindings();
+    }
     // The diagram needs the panel's real width, which only exists once it's visible.
     if (panelId === 'displays') {
         if (!displaysLoadStarted) loadDisplays();
@@ -1361,7 +1367,7 @@ function switchTab(panelId) {
 }
 
 // Tabs whose sections are too few/short to be worth a sidebar sub-list.
-const TABS_WITHOUT_SUBHEADERS = ['about', 'characters', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty'];
+const TABS_WITHOUT_SUBHEADERS = ['about', 'characters', 'chatlog', 'hotkey-groups', 'resources', 'combat', 'bounty', 'key-bindings'];
 
 // IDs/labels are derived from each section's h3[data-i18n] rather than hand-maintained, so they can't drift out of sync as sections are added/removed.
 function buildSectionNav() {
@@ -2430,6 +2436,7 @@ function populateFormFields() {
     populateCharacters();
     populateHotkeyGroups();
     populateNotificationTypes();
+    populateAccountKeyBindings();
 
     refreshOverlayLayoutPreview();
 }
@@ -4533,6 +4540,7 @@ async function saveConfigurationImpl() {
         saveProfileSwitchHotkeys();
         saveAppHotkeys();
         saveUrlHotkeys();
+        saveAccountKeyBindings();
         saveOreTable();
 
         if (!currentGlobalSettings) currentGlobalSettings = {};
@@ -4950,7 +4958,10 @@ function findHotkeyConflicts() {
     });
 
     // Characters sharing a hotkey cycle instead of conflicting - only flag groups reaching outside the character roster.
-    return Array.from(byKey.values()).filter(inputs => inputs.length > 1 && inputs.some(input => !isCharacterHotkeyInput(input)));
+    // Key Binding rows sharing a key likewise cycle through all their accounts.
+    return Array.from(byKey.values()).filter(inputs => inputs.length > 1
+        && inputs.some(input => !isCharacterHotkeyInput(input))
+        && !inputs.every(isAccountBindingHotkeyInput));
 }
 
 // Returns the conflict groups so callers can report them.
@@ -5196,6 +5207,96 @@ function renderDisplays() {
 window.addEventListener('resize', () => {
     if (displaysData && document.querySelector('.panel-content[data-panel="displays"].active')) renderDisplays();
 });
+
+// ---- Key Binding tab: hotkeys bound to Account Config accounts (config.accountHotkeys; handled by hotkeys.zig's activateAccount) ----
+function currentAccountHotkeys() {
+    if (!currentConfig) return [];
+    if (!Array.isArray(currentConfig.accountHotkeys)) currentConfig.accountHotkeys = [];
+    return currentConfig.accountHotkeys;
+}
+
+function isAccountBindingHotkeyInput(input) {
+    return input.id?.startsWith('acctkey_');
+}
+
+function populateAccountKeyBindings() {
+    const container = document.getElementById('accountKeyBindingsList');
+    if (!container) return;
+    const bindings = currentAccountHotkeys();
+    const accounts = accountsData?.accounts || [];
+
+    if (bindings.length === 0) {
+        container.innerHTML = accounts.length === 0
+            ? `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.noAccounts'))}</p>
+               <button type="button" class="button-outline" onclick="switchTab('accounts')">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`
+            : `<p class="account-empty">${escapeHtml(t('dynamic.keyBindings.empty'))}</p>`;
+        updateHotkeyConflictHighlights();
+        return;
+    }
+
+    container.innerHTML = bindings.map((binding, index) => {
+        const known = accounts.some(a => a.id === binding.accountId);
+        const options = [
+            `<option value="">${escapeHtml(t('dynamic.keyBindings.chooseAccount'))}</option>`,
+            ...accounts.map(a => `<option value="${escapeHtml(a.id)}"${a.id === binding.accountId ? ' selected' : ''}>${escapeHtml(a.name)}</option>`),
+            // Keeps a binding to a since-deleted account visible instead of silently re-pointing it.
+            ...(binding.accountId && !known ? [`<option value="${escapeHtml(binding.accountId)}" selected>${escapeHtml(t('dynamic.keyBindings.missingAccount'))}</option>`] : []),
+        ].join('');
+        const account = accounts.find(a => a.id === binding.accountId);
+        const members = account
+            ? (accountsData.characters || []).filter(c => c.accountId === account.id).map(accountCharacterLabel).sort((a, b) => a.localeCompare(b))
+            : [];
+        const label = t('dynamic.keyBindings.hotkeyLabel').replace('{account}', account ? account.name : '?');
+        return `
+            <div class="account-key-row list-container">
+                <div class="field-row">
+                    <select id="acctkey_${index}_account" aria-label="${escapeHtml(t('dynamic.displayRegions.accountLabel'))}" onchange="onAccountKeyBindingAccountChange(${index})">${options}</select>
+                    ${renderHotkeyInputHtml(`acctkey_${index}_hotkey`, escapeHtml(vkHexToFriendly(binding.hotkey) || ''), t('dynamic.keyBindings.hotkeyPlaceholder'), ` aria-label="${escapeHtml(label)}"`)}
+                    <button type="button" class="button-remove" id="acctkey_${index}_removeBtn" onclick="confirmRemove('acctkey_${index}_removeBtn', () => removeAccountKeyBinding(${index}))">${escapeHtml(t('common.remove'))}</button>
+                </div>
+                <div class="account-key-members">${escapeHtml(account
+                    ? (members.length ? t('dynamic.keyBindings.members').replace('{names}', members.join(', ')) : t('dynamic.displayRegions.accountEmpty'))
+                    : '')}</div>
+            </div>`;
+    }).join('');
+    updateHotkeyConflictHighlights();
+}
+
+function saveAccountKeyBindings() {
+    currentAccountHotkeys().forEach((binding, index) => {
+        const account = document.getElementById(`acctkey_${index}_account`);
+        const hotkey = document.getElementById(`acctkey_${index}_hotkey`);
+        if (account) binding.accountId = account.value;
+        if (hotkey) binding.hotkey = hotkey.value || null;
+    });
+}
+
+function addAccountKeyBinding() {
+    if (!currentConfig) return;
+    saveAccountKeyBindings();
+    const accounts = accountsData?.accounts || [];
+    // Pre-pick the first account no binding uses yet, so the common "one key per account" setup is a click less each.
+    const used = new Set(currentAccountHotkeys().map(b => b.accountId));
+    const next = accounts.find(a => !used.has(a.id));
+    currentAccountHotkeys().push({ hotkey: null, accountId: next ? next.id : '' });
+    markAsChanged();
+    populateAccountKeyBindings();
+    scrollContentPanelToBottom();
+}
+
+function removeAccountKeyBinding(index) {
+    saveAccountKeyBindings();
+    const bindings = currentAccountHotkeys();
+    if (!bindings[index]) return;
+    bindings.splice(index, 1);
+    markAsChanged();
+    populateAccountKeyBindings();
+}
+
+function onAccountKeyBindingAccountChange(index) {
+    saveAccountKeyBindings();
+    populateAccountKeyBindings();
+}
 
 // ---- In-dialog updater (About tab) ----
 // Each step is user-initiated: check, then download, then install behind a confirmation. The backend keeps the found/staged release between calls.

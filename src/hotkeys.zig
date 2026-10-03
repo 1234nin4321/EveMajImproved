@@ -6,6 +6,7 @@ const scout = @import("scout.zig");
 const config_mod = @import("config.zig");
 const vk = @import("virtual_keys.zig");
 const mouse_hook = @import("mouse_hook.zig");
+const accounts_store = @import("accounts_store.zig");
 const log = @import("log.zig");
 const slog = log.scoped("hotkeys");
 const painter_mod = @import("painter.zig");
@@ -91,13 +92,14 @@ fn lowLevelHotkeyReleaseProc(nCode: c_int, wParam: win32.WPARAM, lParam: win32.L
     return win32.CallNextHookEx(null, nCode, wParam, lParam);
 }
 
-// Hotkey IDs are banded to avoid collisions: 0-999 groups (3 per group), 1000s global, 2000s per-character, 3000s profile switch, 5000s app hotkeys, 6000s URL hotkeys.
+// Hotkey IDs are banded to avoid collisions: 0-999 groups (3 per group), 1000s global, 2000s per-character, 3000s profile switch, 5000s app hotkeys, 6000s URL hotkeys, 7000s account key bindings.
 const HOTKEY_ID_CYCLE_GROUP_BASE: c_int = 0;
 const HOTKEY_ID_GLOBAL_ACTION_BASE: c_int = 1000;
 const HOTKEY_ID_PER_CHARACTER_BASE: c_int = 2000;
 const HOTKEY_ID_PROFILE_SWITCH_BASE: c_int = 3000;
 const HOTKEY_ID_APP_HOTKEY_BASE: c_int = 5000;
 const HOTKEY_ID_URL_HOTKEY_BASE: c_int = 6000;
+const HOTKEY_ID_ACCOUNT_BASE: c_int = 7000;
 
 const GlobalActionId = enum(c_int) {
     MinimizeAll = HOTKEY_ID_GLOBAL_ACTION_BASE + 0,
@@ -146,6 +148,7 @@ pub const HotkeyActionType = enum {
     ReturnToLastApp,
     ActivateApp,
     OpenUrl,
+    ActivateAccount,
 };
 
 pub const HotkeyAction = union(HotkeyActionType) {
@@ -186,6 +189,10 @@ pub const HotkeyAction = union(HotkeyActionType) {
     },
     OpenUrl: struct {
         url_index: usize,
+    },
+    /// Key Binding tab: indices into config.accountHotkeys sharing this key (owned); cycles through the running clients of every listed account.
+    ActivateAccount: struct {
+        binding_indices: []const usize,
     },
 };
 
@@ -379,6 +386,32 @@ pub const HotkeyManager = struct {
             }
         }
         const has_per_character_hotkeys = per_character_groups.items.len > 0;
+
+        // Key Binding rows sharing a key collapse into one registration (RegisterHotKey rejects duplicates), cycling across every account bound to it.
+        var account_key_groups: std.ArrayList(PerCharacterHotkeyGroup) = .empty;
+        defer {
+            for (account_key_groups.items) |*group| group.indices.deinit(self.allocator);
+            account_key_groups.deinit(self.allocator);
+        }
+        for (self.config.accountHotkeys.items, 0..) |binding, binding_index| {
+            const binding_vk = binding.hotkey orelse continue;
+            if (binding.accountId.len == 0) continue;
+            var existing: ?*PerCharacterHotkeyGroup = null;
+            for (account_key_groups.items) |*group| {
+                if (group.vk == binding_vk) {
+                    existing = group;
+                    break;
+                }
+            }
+            if (existing) |group| {
+                try group.indices.append(self.allocator, binding_index);
+            } else {
+                var new_group = PerCharacterHotkeyGroup{ .vk = binding_vk, .indices = .empty };
+                try new_group.indices.append(self.allocator, binding_index);
+                try account_key_groups.append(self.allocator, new_group);
+            }
+        }
+        const has_account_hotkeys = account_key_groups.items.len > 0;
         var has_profile_switch_hotkeys = false;
         for (self.global_settings.profileSwitchHotkeys.items) |psh| {
             if (psh.hotkey != null) {
@@ -401,7 +434,7 @@ pub const HotkeyManager = struct {
             }
         }
 
-        if (!has_groups and !has_minimize and !has_close and !has_toggle_vis and !has_toggle_auto_min and !has_next_profile and !has_previous_profile and !has_toggle_exclusion and !has_next_excluded and !has_previous_excluded and !has_suspend and !has_cycle_notified and !has_previous_notified and !has_next_all_clients and !has_previous_all_clients and !has_next_not_logged_in and !has_previous_not_logged_in and !has_move_to_saved and !has_return_to_last_app and !has_per_character_hotkeys and !has_profile_switch_hotkeys and !has_app_hotkeys and !has_url_hotkeys) {
+        if (!has_groups and !has_minimize and !has_close and !has_toggle_vis and !has_toggle_auto_min and !has_next_profile and !has_previous_profile and !has_toggle_exclusion and !has_next_excluded and !has_previous_excluded and !has_suspend and !has_cycle_notified and !has_previous_notified and !has_next_all_clients and !has_previous_all_clients and !has_next_not_logged_in and !has_previous_not_logged_in and !has_move_to_saved and !has_return_to_last_app and !has_per_character_hotkeys and !has_profile_switch_hotkeys and !has_app_hotkeys and !has_url_hotkeys and !has_account_hotkeys) {
             slog.debug("No hotkeys configured", .{});
             return;
         }
@@ -444,6 +477,7 @@ pub const HotkeyManager = struct {
         expected_count += profile_switch_count;
         expected_count += app_hotkey_count;
         expected_count += url_hotkey_count;
+        expected_count += account_key_groups.items.len;
 
         if (has_minimize) expected_count += 1;
         if (has_close) expected_count += 1;
@@ -529,6 +563,26 @@ pub const HotkeyManager = struct {
                 self.allocator.free(owned_indices);
                 const key_name = formatKeyName(group.vk, &key_name_buf);
                 slog.err("Failed to register hotkey {s} for character [{s}...]: {}", .{ key_name, first_name, err });
+                failed_count += 1;
+            };
+        }
+
+        for (account_key_groups.items, 0..) |*group, group_index| {
+            const account_id: c_int = HOTKEY_ID_ACCOUNT_BASE + @as(c_int, @intCast(group_index));
+            const first_account = self.config.accountHotkeys.items[group.indices.items[0]].accountId;
+            var account_desc_buf: [128]u8 = undefined;
+            const account_desc = std.fmt.bufPrint(&account_desc_buf, "activate account [{s}] ({} binding(s))", .{ first_account, group.indices.items.len }) catch "activate account";
+
+            const owned_indices = self.allocator.dupe(usize, group.indices.items) catch {
+                slog.err("Failed to allocate memory for account key binding [{s}]", .{first_account});
+                failed_count += 1;
+                continue;
+            };
+            const account_action = HotkeyAction{ .ActivateAccount = .{ .binding_indices = owned_indices } };
+            self.registerAndTrackHotkey(hwnd, account_id, group.vk, account_action, account_desc) catch |err| {
+                self.allocator.free(owned_indices);
+                const key_name = formatKeyName(group.vk, &key_name_buf);
+                slog.err("Failed to register key binding {s} for account [{s}]: {}", .{ key_name, first_account, err });
                 failed_count += 1;
             };
         }
@@ -794,8 +848,10 @@ pub const HotkeyManager = struct {
 
         var action_it = self.hotkey_map.valueIterator();
         while (action_it.next()) |action| {
-            if (std.meta.activeTag(action.*) == .ActivateCharacter) {
-                self.allocator.free(action.ActivateCharacter.character_indices);
+            switch (action.*) {
+                .ActivateCharacter => |a| self.allocator.free(a.character_indices),
+                .ActivateAccount => |a| self.allocator.free(a.binding_indices),
+                else => {},
             }
         }
 
@@ -867,6 +923,9 @@ pub const HotkeyManager = struct {
             },
             .ActivateCharacter => {
                 self.activatePerCharacterGroup(hotkey_id);
+            },
+            .ActivateAccount => |a| {
+                self.activateAccount(a.binding_indices);
             },
             .AssignGroup => |assign| {
                 self.handleAssignGroup(assign.group_index);
@@ -1336,6 +1395,39 @@ pub const HotkeyManager = struct {
 
         group.current_index = start_index;
         slog.warn("No character sharing this hotkey is currently running", .{});
+    }
+
+    /// Brings up a running client of the bound account(s): the first in Characters-list order, or the next one when an account client is already focused. Membership is re-read from accounts.json so Account Config edits apply without a restart.
+    fn activateAccount(self: *HotkeyManager, binding_indices: []const usize) void {
+        self.painter.refreshAccountMembership();
+        const windows = self.scout.getWindows();
+        const ordered = buildCharacterOrderedIndices(self, windows) catch |err| {
+            slog.err("Failed to order clients for account key binding: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(ordered);
+
+        var matches: std.ArrayList(win32.HWND) = .empty;
+        defer matches.deinit(self.allocator);
+        for (ordered) |window_index| {
+            const window = windows[window_index];
+            if (scout.isGenericCharacterName(window.character_name)) continue;
+            const account = accounts_store.accountOf(&self.painter.account_membership, window.character_name) orelse continue;
+            for (binding_indices) |bi| {
+                if (bi >= self.config.accountHotkeys.items.len) continue;
+                if (!std.mem.eql(u8, self.config.accountHotkeys.items[bi].accountId, account)) continue;
+                matches.append(self.allocator, window.hwnd) catch return;
+                break;
+            }
+        }
+
+        if (matches.items.len == 0) {
+            slog.warn("No clients of the bound account(s) are currently running", .{});
+            return;
+        }
+        const next = if (indexOfHwnd(matches.items, win32.GetForegroundWindow())) |i| (i + 1) % matches.items.len else 0;
+        slog.info("Account key binding: activating client {}/{}", .{ next + 1, matches.items.len });
+        input.handleThumbnailClick(matches.items[next]);
     }
 
     /// Like cycleNotLoggedIn but scoped to one group, with not-logged-in clients appended after the group's characters when includeNotLoggedIn is set.

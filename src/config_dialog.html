@@ -66,6 +66,9 @@
                 <div class="tab-item" data-tab="hotkey-groups">
                     <span class="tab-glyph" aria-hidden="true">◫</span><span data-i18n="tab.hotkey-groups.title">hotkey groups</span>
                 </div>
+                <div class="tab-item" data-tab="key-bindings">
+                    <span class="tab-glyph" aria-hidden="true">⌗</span><span data-i18n="tab.key-bindings.title">key binding</span>
+                </div>
                 <div class="tab-item" data-tab="chatlog">
                     <span class="tab-glyph" aria-hidden="true">⌕</span><span data-i18n="tab.chatlog.title">log monitoring</span>
                 </div>
@@ -1127,6 +1130,27 @@
                         <div class="button-row">
                             <button type="button" id="refreshDisplaysBtn" onclick="loadDisplays()" data-i18n="button.refresh-displays.label">↻ Refresh</button>
                             <button type="button" id="identifyDisplaysBtn" onclick="identifyDisplays()" data-i18n="button.identify-displays.label">Identify Displays</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-content" data-panel="key-bindings">
+                    <div class="section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.key-bindings.section.accounts.heading">Account Key Bindings</h3>
+                            <div class="section-heading-actions">
+                                <span class="scope-chip" data-i18n="common.scopeProfile">profile</span>
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
+                        </div>
+                        <p class="hint" data-i18n="tab.key-bindings.section.accounts.hint">Bind keys to accounts from Account Config. Pressing a key brings that account's client to the front; if several of its characters are open, pressing again cycles through them. Add as many bindings as you like - bindings that share a key cycle through all of their accounts.</p>
+
+                        <div id="accountKeyBindingsList" class="list-container">
+                            <!-- Account key bindings will be dynamically populated here -->
+                        </div>
+
+                        <div class="button-row">
+                            <button type="button" onclick="addAccountKeyBinding()" data-i18n="button.add-account-key-binding.label">+ Add Key Binding</button>
                         </div>
                     </div>
                 </div>

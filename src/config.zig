@@ -319,6 +319,29 @@ pub const AppHotkey = struct {
     }
 };
 
+/// Key Binding tab: a hotkey that brings up an Account Config account's running client, cycling through them when several of its characters are open. accountId refers to profiles/accounts.json (see accounts_store.zig).
+pub const AccountHotkey = struct {
+    hotkey: ?u32,
+    accountId: []const u8,
+
+    pub fn deinit(self: *AccountHotkey, allocator: std.mem.Allocator) void {
+        allocator.free(self.accountId);
+    }
+
+    pub const Wire = struct {
+        hotkey: ?VkCode = null,
+        accountId: []const u8 = "",
+    };
+
+    pub fn toWire(self: AccountHotkey) Wire {
+        return .{ .hotkey = wrapVk(self.hotkey), .accountId = self.accountId };
+    }
+
+    pub fn fromWire(w: Wire, allocator: std.mem.Allocator) !AccountHotkey {
+        return .{ .hotkey = unwrapVk(w.hotkey), .accountId = try allocator.dupe(u8, w.accountId) };
+    }
+};
+
 /// Binding of a hotkey to a URL, opened via ShellExecute (or, with uploadClipboard, POSTed as a paste upload first - see paste_upload.zig).
 pub const UrlHotkey = struct {
     hotkey: ?u32,
@@ -2052,6 +2075,7 @@ pub const Config = struct {
     autoColorsLoaded: bool = false,
 
     hotkeyGroups: std.ArrayList(HotkeyGroup),
+    accountHotkeys: std.ArrayList(AccountHotkey),
     requireEveFocus: bool = false,
     resetGroupIndexOnNonGroupFocus: bool = false,
     allowHotkeyAutoRepeat: bool = false,
@@ -2093,6 +2117,7 @@ pub const Config = struct {
         characters: []const CharacterConfig.Wire = &.{},
         systemColors: []const SystemColor.Wire = &.{},
         hotkeyGroups: []const HotkeyGroup.Wire = &.{},
+        accountHotkeys: []const AccountHotkey.Wire = &.{},
         // Read-only legacy: merged into hotkeyGroups on load and always written back empty.
         quickGroups: []const HotkeyGroup.LegacyQuickGroupWire = &.{},
         // Nested (not flattened onto Config.Wire directly) because config_dialog.js's in-memory currentConfig object keeps these under a "hotkeys" sub-object throughout the file, not just in the wire JSON shape.
@@ -2130,6 +2155,9 @@ pub const Config = struct {
         const groups = try allocator.alloc(HotkeyGroup.Wire, self.hotkeyGroups.items.len);
         for (self.hotkeyGroups.items, 0..) |item, i| groups[i] = item.toWire();
 
+        const account_hotkeys = try allocator.alloc(AccountHotkey.Wire, self.accountHotkeys.items.len);
+        for (self.accountHotkeys.items, 0..) |item, i| account_hotkeys[i] = item.toWire();
+
         return .{
             .app = PROFILE_FORMAT_IDENTIFIER,
             .formatVersion = PROFILE_FORMAT_VERSION,
@@ -2153,6 +2181,7 @@ pub const Config = struct {
             .characters = chars,
             .systemColors = sys_colors,
             .hotkeyGroups = groups,
+            .accountHotkeys = account_hotkeys,
             .hotkeys = .{
                 .requireEveFocus = self.requireEveFocus,
                 .resetGroupIndexOnNonGroupFocus = self.resetGroupIndexOnNonGroupFocus,
@@ -2280,6 +2309,9 @@ pub const Config = struct {
         try cfg.hotkeyGroups.ensureTotalCapacity(allocator, w.hotkeyGroups.len + w.quickGroups.len);
         for (w.hotkeyGroups) |hgw| cfg.hotkeyGroups.appendAssumeCapacity(try HotkeyGroup.fromWire(hgw, allocator));
         for (w.quickGroups) |qgw| cfg.hotkeyGroups.appendAssumeCapacity(try HotkeyGroup.fromLegacyQuickGroupWire(qgw, allocator));
+
+        try cfg.accountHotkeys.ensureTotalCapacity(allocator, w.accountHotkeys.len);
+        for (w.accountHotkeys) |ahw| cfg.accountHotkeys.appendAssumeCapacity(try AccountHotkey.fromWire(ahw, allocator));
 
         return cfg;
     }
@@ -4087,6 +4119,7 @@ pub const Config = struct {
             .characters = std.ArrayList(CharacterConfig).empty,
             .systemColors = std.ArrayList(SystemColor).empty,
             .hotkeyGroups = std.ArrayList(HotkeyGroup).empty,
+            .accountHotkeys = std.ArrayList(AccountHotkey).empty,
             .hotkeyMinimizeAll = null,
             .hotkeyCloseAll = null,
             .hotkeyToggleVisibility = null,
@@ -4487,6 +4520,9 @@ pub const Config = struct {
             group.deinit();
         }
         self.hotkeyGroups.deinit(allocator);
+
+        for (self.accountHotkeys.items) |*ah| ah.deinit(allocator);
+        self.accountHotkeys.deinit(allocator);
 
         self.chatlog.deinit(allocator);
         self.combat.deinit(allocator);

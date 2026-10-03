@@ -2611,6 +2611,13 @@ pub const Painter = struct {
         return calculateRegionFitGrid(cell, count, spacing, spacing, self.regionFitAspectRatio(), self.regionFitMaxCellSize(cell));
     }
 
+    /// Unconditional re-read of accounts.json, for the Key Binding tab's account hotkeys.
+    pub fn refreshAccountMembership(self: *Painter) void {
+        const fresh = accounts_store.loadMembership(self.allocator, self.io);
+        accounts_store.freeMembership(self.allocator, &self.account_membership);
+        self.account_membership = fresh;
+    }
+
     /// Only account cells need membership, so skip the file read otherwise.
     fn reloadAccountMembershipIfNeeded(self: *Painter) void {
         var buf: [display_grid.MAX_LAYOUTS]display_grid.LayoutView = undefined;

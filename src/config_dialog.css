@@ -3725,3 +3725,19 @@ button.confirm-delete:hover {
     flex: none;
     white-space: nowrap;
 }
+
+/* Key Binding tab */
+.account-key-row > .field-row > select {
+    flex: 0 0 200px;
+    width: 200px;
+}
+
+.account-key-members {
+    margin-top: 2px;
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.account-key-members:empty {
+    display: none;
+}
