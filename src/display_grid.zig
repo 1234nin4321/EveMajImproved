@@ -6,7 +6,7 @@ pub const MAX_DIM: u8 = 8;
 pub const MAX_CELLS: usize = @as(usize, MAX_DIM) * MAX_DIM;
 
 pub const SlotKind = enum {
-    /// Holds nothing.
+    /// Holds nothing - unless it has a fillOrder, which makes it take the leftovers (see Slot.fillOrder).
     Empty,
     /// Every thumbnail no other cell claims.
     EveryoneElse,
@@ -24,6 +24,13 @@ pub const Slot = struct {
     account: ?[]const u8 = null,
     /// Character names, for .Custom (any number) and .Client (the first is used).
     characters: []const []const u8 = &.{},
+    /// .Empty only: a Region Fit direction name (e.g. "RowFirst_LTR_TTB"). When set, the region takes the characters no other region claims - same tier as Everyone Else - and arranges them in this order instead of the global one.
+    fillOrder: ?[]const u8 = null,
+
+    /// Whether this slot catches characters nothing more specific claimed.
+    pub fn takesLeftovers(self: Slot) bool {
+        return self.kind == .EveryoneElse or (self.kind == .Empty and self.fillOrder != null);
+    }
 };
 
 pub const DisplayGrid = struct {
@@ -59,6 +66,7 @@ pub const DisplayGrid = struct {
     pub fn deinit(self: *DisplayGrid, allocator: std.mem.Allocator) void {
         for (self.slots) |slot| {
             if (slot.account) |a| allocator.free(a);
+            if (slot.fillOrder) |f| allocator.free(f);
             for (slot.characters) |c| allocator.free(c);
             if (slot.characters.len > 0) allocator.free(slot.characters);
         }
@@ -78,6 +86,7 @@ pub const DisplayGrid = struct {
         for (slots, self.slots[0..slots.len]) |*dst, src| {
             dst.kind = src.kind;
             if (src.account) |a| dst.account = try allocator.dupe(u8, a);
+            if (src.fillOrder) |f| dst.fillOrder = try allocator.dupe(u8, f);
             if (src.characters.len > 0) {
                 const names = try allocator.alloc([]const u8, src.characters.len);
                 @memset(names, "");
@@ -123,7 +132,7 @@ pub fn assignSlot(grid: DisplayGrid, name: []const u8, account_of: ?[]const u8) 
         }
     }
     for (slots, 0..) |slot, i| {
-        if (slot.kind == .EveryoneElse) return i;
+        if (slot.takesLeftovers()) return i;
     }
     return null;
 }
@@ -218,7 +227,9 @@ pub fn assignSlotMulti(views: []const LayoutView, name: []const u8, account_of: 
         for (views) |v| {
             const cells = @min(v.grid.cellCount(), v.grid.slots.len);
             for (v.grid.slots[0..cells], 0..) |slot, i| {
-                if (slot.kind != kind) continue;
+                // Leftover-taking Empty regions share Everyone Else's tier, so the first catch-all in grid order wins.
+                const in_pass = slot.kind == kind or (kind == .EveryoneElse and slot.kind == .Empty);
+                if (!in_pass) continue;
                 if (slotClaims(slot, name, account_of)) return base + i;
             }
             base += v.grid.cellCount();
@@ -229,7 +240,7 @@ pub fn assignSlotMulti(views: []const LayoutView, name: []const u8, account_of: 
 
 fn slotClaims(slot: Slot, name: []const u8, account_of: ?[]const u8) bool {
     return switch (slot.kind) {
-        .Empty => false,
+        .Empty => slot.fillOrder != null,
         .EveryoneElse => true,
         .Client => slot.characters.len > 0 and std.ascii.eqlIgnoreCase(slot.characters[0], name),
         .Custom => for (slot.characters) |c| {
@@ -237,6 +248,15 @@ fn slotClaims(slot: Slot, name: []const u8, account_of: ?[]const u8) bool {
         } else false,
         .Account => account_of != null and slot.account != null and std.mem.eql(u8, slot.account.?, account_of.?),
     };
+}
+
+/// The fill order a global cell arranges its characters in, when it overrides the global one (leftover-taking Empty regions only).
+pub fn slotFillOrder(views: []const LayoutView, global: usize) ?[]const u8 {
+    const ref = locate(views, global) orelse return null;
+    const grid = views[ref.view].grid;
+    if (ref.local >= grid.slots.len) return null;
+    const slot = grid.slots[ref.local];
+    return if (slot.kind == .Empty) slot.fillOrder else null;
 }
 
 /// Screen rect of global cell `global`.
@@ -379,10 +399,27 @@ test "multi-display: one priority pass across displays, global cell indices" {
     try std.testing.expectEqual(@as(?usize, null), assignSlotMulti(views[1..], "Nobody", null));
 }
 
+test "Empty regions with a fill order take leftovers, in grid order with Everyone Else" {
+    const plain_empty = [_]Slot{ .{ .kind = .Empty }, .{ .kind = .Custom, .characters = &.{"A"} } };
+    const v1 = [_]LayoutView{.{ .rect = .{ .left = 0, .top = 0, .right = 100, .bottom = 100 }, .grid = .{ .columns = 2, .rows = 1, .slots = &plain_empty } }};
+    try std.testing.expectEqual(@as(?usize, null), assignSlotMulti(&v1, "B", null));
+
+    const leftovers_first = [_]Slot{ .{ .kind = .Empty, .fillOrder = "ColumnFirst_TTB_LTR" }, .{ .kind = .EveryoneElse }, .{ .kind = .Custom, .characters = &.{"A"} } };
+    const v2 = [_]LayoutView{.{ .rect = .{ .left = 0, .top = 0, .right = 300, .bottom = 100 }, .grid = .{ .columns = 3, .rows = 1, .slots = &leftovers_first } }};
+    try std.testing.expectEqual(@as(?usize, 0), assignSlotMulti(&v2, "B", null));
+    try std.testing.expectEqual(@as(?usize, 2), assignSlotMulti(&v2, "A", null));
+    try std.testing.expectEqualStrings("ColumnFirst_TTB_LTR", slotFillOrder(&v2, 0).?);
+    try std.testing.expect(slotFillOrder(&v2, 1) == null);
+
+    const everyone_first = [_]Slot{ .{ .kind = .EveryoneElse }, .{ .kind = .Empty, .fillOrder = "RowFirst_RTL_TTB" } };
+    const v3 = [_]LayoutView{.{ .rect = .{ .left = 0, .top = 0, .right = 200, .bottom = 100 }, .grid = .{ .columns = 2, .rows = 1, .slots = &everyone_first } }};
+    try std.testing.expectEqual(@as(?usize, 0), assignSlotMulti(&v3, "B", null));
+}
+
 test "layouts clone and parse without leaks" {
     const allocator = std.testing.allocator;
     const json =
-        \\[{"displayId":"\\\\?\\DISPLAY#DEL","x":0,"y":0,"width":2560,"height":1392,"grid":{"columns":2,"rows":2,"fitToGrid":true,"slots":[{"kind":"EveryoneElse"}]}},
+        \\[{"displayId":"\\\\?\\DISPLAY#DEL","x":0,"y":0,"width":2560,"height":1392,"grid":{"columns":2,"rows":2,"fitToGrid":true,"slots":[{"kind":"EveryoneElse"},{"kind":"Empty","fillOrder":"RowFirst_LTR_BTT"}]}},
         \\ {"displayId":"\\\\.\\DISPLAY3","x":2560,"y":180,"width":1920,"height":1080,"useWorkArea":false,"grid":{"size":1,"slots":[{"kind":"Account","account":"acc_1"}]}}]
     ;
     const parsed = try std.json.parseFromSlice(std.json.Value, allocator, json, .{});
@@ -396,6 +433,7 @@ test "layouts clone and parse without leaks" {
     const copy = try cloneLayouts(allocator, layouts);
     defer freeLayouts(allocator, copy);
     try std.testing.expectEqual(@as(i32, 2560), copy[1].x);
+    try std.testing.expectEqualStrings("RowFirst_LTR_BTT", copy[0].grid.slots[1].fillOrder.?);
 }
 
 test "clone, fromJsonValue and deinit round-trip without leaks" {

@@ -1632,7 +1632,7 @@ function displayGridSummary(grid) {
     const { columns, rows } = displayGridDims(grid);
     if (!columns || !rows) return t('dynamic.displayRegions.summaryOff');
     const cells = columns * rows;
-    const used = (grid.slots || []).slice(0, cells).filter(s => s && s.kind && s.kind !== 'Empty').length;
+    const used = (grid.slots || []).slice(0, cells).filter(s => s && s.kind && (s.kind !== 'Empty' || s.fillOrder)).length;
     const summary = t('dynamic.displayRegions.summary')
         .replace('{cols}', String(columns))
         .replace('{rows}', String(rows))
@@ -1645,7 +1645,7 @@ function anyLayoutHasCatchAll(exceptIndex = -1) {
     return currentDisplayLayouts().some((l, i) => {
         if (i === exceptIndex) return false;
         const { columns, rows } = displayGridDims(l.grid);
-        return (l.grid?.slots || []).slice(0, columns * rows).some(s => s.kind === 'EveryoneElse');
+        return (l.grid?.slots || []).slice(0, columns * rows).some(slotTakesLeftovers);
     });
 }
 
@@ -1788,15 +1788,27 @@ function displayRegionCharacterNames() {
     return [...names.values()].sort((a, b) => a.localeCompare(b));
 }
 
+// The Fill Order choices, read from the global Fill Order dropdown so the two always offer the same options (and translations).
+function fillOrderOptions() {
+    return [...(document.getElementById('regionFitDirection')?.options || [])].map(o => ({ value: o.value, label: o.textContent }));
+}
+
 function normalizeDisplayRegionSlot(slot) {
     const kind = DISPLAY_REGION_KINDS.includes(slot?.kind) ? slot.kind : 'Empty';
+    const fillOrder = kind === 'Empty' && fillOrderOptions().some(o => o.value === slot?.fillOrder) ? slot.fillOrder : null;
     return {
         kind,
         account: kind === 'Account' ? (slot.account || null) : null,
         characters: kind === 'Custom' ? [...(slot.characters || [])]
             : kind === 'Client' ? (slot.characters || []).slice(0, 1)
             : [],
+        fillOrder,
     };
+}
+
+// An Empty region with a fill order takes the leftovers, same as Everyone Else.
+function slotTakesLeftovers(slot) {
+    return slot?.kind === 'EveryoneElse' || (slot?.kind === 'Empty' && !!slot?.fillOrder);
 }
 
 // The area this region's grid splits: a connected display's work area or full bounds, else the region's stored rect (drawn, or a display that's unplugged right now).
@@ -1884,7 +1896,7 @@ function displayRegionCellLabel(slot) {
             const acct = findAccount(slot.account);
             return acct ? `${t('dynamic.displayRegions.kind.Account')}: ${acct.name}` : t('dynamic.displayRegions.kind.Account');
         }
-        default: return t('dynamic.displayRegions.kind.Empty');
+        default: return slot.fillOrder ? t('dynamic.displayRegions.leftovers') : t('dynamic.displayRegions.kind.Empty');
     }
 }
 
@@ -1943,7 +1955,7 @@ function renderDisplayRegionsModal() {
     gridEl.classList.toggle('is-dense', draft.columns * draft.rows > 16);
     const cells = draft.columns * draft.rows;
     gridEl.innerHTML = draft.slots.slice(0, cells).map((slot, i) => `
-        <button type="button" class="display-region-cell kind-${slot.kind}${i === displayRegionsSelectedCell ? ' is-selected' : ''}" onclick="selectDisplayRegionCell(${i})">
+        <button type="button" class="display-region-cell kind-${slot.kind}${slot.kind === 'Empty' && slot.fillOrder ? ' takes-leftovers' : ''}${i === displayRegionsSelectedCell ? ' is-selected' : ''}" onclick="selectDisplayRegionCell(${i})">
             <span class="display-region-cell-number">${i + 1}</span>
             <span class="display-region-cell-label">${escapeHtml(displayRegionCellLabel(slot))}</span>
         </button>`).join('');
@@ -1993,6 +2005,16 @@ function renderDisplayRegionEditor() {
                 </select>
                 ${slot.account ? `<p class="display-region-members">${escapeHtml(members.length ? members.join(', ') : t('dynamic.displayRegions.accountEmpty'))}</p>` : ''}`;
         }
+    } else if (slot.kind === 'Empty') {
+        const options = fillOrderOptions().map(o =>
+            `<option value="${escapeHtml(o.value)}"${slot.fillOrder === o.value ? ' selected' : ''}>${escapeHtml(o.label)}</option>`).join('');
+        body = `
+            <label for="drFillOrder" class="display-region-field-label">${escapeHtml(t('dynamic.displayRegions.fillOrderLabel'))}</label>
+            <select id="drFillOrder" data-untracked onchange="onDisplayRegionFillOrderChange(this.value)">
+                <option value="">${escapeHtml(t('dynamic.displayRegions.stayEmpty'))}</option>
+                ${options}
+            </select>
+            <p class="account-empty">${escapeHtml(t(slot.fillOrder ? 'dynamic.displayRegions.emptyFillHint' : 'dynamic.displayRegions.hint.Empty'))}</p>`;
     } else {
         body = `<p class="account-empty">${escapeHtml(t(`dynamic.displayRegions.hint.${slot.kind}`))}</p>`;
     }
@@ -2018,6 +2040,11 @@ function onDisplayRegionCustomToggle() {
 
 function onDisplayRegionClientChange(name) {
     displayRegionsDraft.slots[displayRegionsSelectedCell].characters = name ? [name] : [];
+    renderDisplayRegionsModal();
+}
+
+function onDisplayRegionFillOrderChange(value) {
+    displayRegionsDraft.slots[displayRegionsSelectedCell].fillOrder = value || null;
     renderDisplayRegionsModal();
 }
 

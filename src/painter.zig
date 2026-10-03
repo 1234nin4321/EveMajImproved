@@ -1630,7 +1630,7 @@ pub const Painter = struct {
                 if (!carved_out) {
                     if (gl.slot_of[index]) |slot| {
                         const grid = gl.grids[slot];
-                        const pos = regionFitPositionForGrid(gl.cells[slot], grid, gl.rank_in_slot[index], cfg.regionFitDirection, cfg.spacing);
+                        const pos = regionFitPositionForGrid(gl.cells[slot], grid, gl.rank_in_slot[index], self.gridSlotDirection(slot), cfg.spacing);
                         hdwp = win32.DeferWindowPos(hdwp, thumbnail.hwnd, win32.HWND_NOTOPMOST, pos.x, pos.y, grid.cell_width, grid.cell_height, win32.SWP_NOZORDER | win32.SWP_NOACTIVATE) orelse return;
                         hdwp = win32.DeferWindowPos(hdwp, thumbnail.text_hwnd, win32.HWND_TOPMOST, pos.x, pos.y, grid.cell_width, grid.cell_height, win32.SWP_NOACTIVATE) orelse return;
                         const props = makeThumbnailProps(grid.cell_width, grid.cell_height, win32.DWM_TNP_RECTDESTINATION);
@@ -2478,7 +2478,7 @@ pub const Painter = struct {
                 }
                 const count = self.gridSlotCount(slot) + @intFromBool(!self.hasThumbnailNamed(character_name));
                 const grid = self.gridSlotGrid(slot, @max(count, 1));
-                return regionFitPositionForGrid(self.gridCellRect(slot), grid, rank, cfg.regionFitDirection, cfg.spacing);
+                return regionFitPositionForGrid(self.gridCellRect(slot), grid, rank, self.gridSlotDirection(slot), cfg.spacing);
             }
         } else if (cfg.layoutMode == .RegionFit) {
             if (regionRectFromConfig(cfg)) |region| {
@@ -2584,6 +2584,16 @@ pub const Painter = struct {
         const views = layoutViews(&self.config.display, &buf);
         const r = display_grid.cellRectMulti(views, slot, self.config.display.spacing) orelse return .{ .left = 0, .top = 0, .right = 0, .bottom = 0 };
         return .{ .left = r.left, .top = r.top, .right = r.right, .bottom = r.bottom };
+    }
+
+    /// The order `slot` arranges its thumbnails in: a leftover-taking Empty region's own fill order, else the global Region Fit direction (an unknown name also falls back to it).
+    fn gridSlotDirection(self: *const Painter, slot: usize) types.RegionFitDirection {
+        var buf: [display_grid.MAX_LAYOUTS]display_grid.LayoutView = undefined;
+        const views = layoutViews(&self.config.display, &buf);
+        if (display_grid.slotFillOrder(views, slot)) |name| {
+            if (std.meta.stringToEnum(types.RegionFitDirection, name)) |dir| return dir;
+        }
+        return self.config.display.regionFitDirection;
     }
 
     /// How many current thumbnails `slot` claims (notLoggedInSpace placeholders excluded).

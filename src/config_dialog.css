@@ -3849,3 +3849,10 @@ body.ai-layout .panel-content:not(.ai-panel) {
     font-size: var(--fs-label);
     color: var(--color-muted);
 }
+
+/* An Empty region that takes leftovers is in use, so it drops the empty (dashed) look. */
+.display-region-cell.kind-Empty.takes-leftovers {
+    background: var(--color-surface);
+    border-style: solid;
+    color: var(--color-text-secondary);
+}
