@@ -3079,3 +3079,73 @@ button.confirm-delete:hover {
         opacity: 1;
     }
 }
+
+/* Account Config tab */
+.account-char-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-2) 0;
+    border-bottom: 1px solid var(--color-border-faint);
+}
+
+.account-char-row > select {
+    flex: 0 0 180px;
+    width: 180px;
+}
+
+.account-char-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.account-char-name {
+    font-size: var(--fs-body);
+    color: var(--color-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-char-meta,
+.account-row-detail,
+.account-row-count,
+.account-scan-summary,
+.account-empty {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.account-char-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.account-char-suggestion {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-top: var(--space-1);
+    font-size: var(--fs-label);
+    color: var(--color-accent);
+}
+
+.account-suggestion-accept {
+    height: var(--control-h-dense);
+    padding: 0 var(--space-2);
+    font-size: var(--fs-label);
+}
+
+.account-row-count {
+    flex: none;
+    white-space: nowrap;
+}
+
+.account-row-detail {
+    margin-top: var(--space-1);
+}
+
+.account-scan-summary:empty {
+    display: none;
+}

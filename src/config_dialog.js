@@ -825,6 +825,8 @@ function markAsSaved() {
 // Delegated (not per-element) so rows added later at runtime are covered without needing to re-run this after every dynamic list rebuild.
 function isTrackedFormElement(element) {
     if (!element.matches || !element.matches('input, select, textarea')) return false;
+    // Account Config saves itself to accounts.json on every edit, so its fields never count as unsaved profile changes. An attribute rather than closest(), since its onchange re-renders the row and detaches the element before this runs.
+    if (element.hasAttribute('data-untracked')) return false;
     return element.id !== 'search-filter' && element.id !== 'profile-select' && element.id !== 'ultraPotatoProfileSelect';
 }
 
@@ -1256,6 +1258,7 @@ document.addEventListener('DOMContentLoaded', async function() {
         startMainAppStatusPolling();
         refreshWindowPositionSourceOptions();
         scanUltraPotatoProfiles();
+        loadAccountsData();
 
         await profileListLoaded;
         // Best-effort assumption: whatever profile the app loaded with is live. Only "Make It Live" or a Save updates liveConfirmedProfile after this.
@@ -1340,6 +1343,8 @@ function switchTab(panelId) {
         fitHotkeyGroupCharsList(selectedHotkeyGroupIndex);
     }
     if (panelId === 'characters') alignDetailPanelNameLabel('charactersList');
+    // Scanned lazily on first visit rather than at startup, since name lookups go out to ESI.
+    if (panelId === 'accounts' && !accountScanStarted) scanEveAccounts();
     // A no-op on panels with no .binding-list, so every tab can share this call rather than listing each one.
     alignBindingLabelColumns(`.panel-content[data-panel="${panelId}"]`);
     // Hotkey inputs on the panel just made visible read a real clientWidth for the first time - recheck their placeholder fit.
@@ -5800,6 +5805,332 @@ async function applyUltraPotatoMode() {
     } finally {
         if (btn) btn.disabled = false;
     }
+}
+
+// ---- Account Config ----
+// Saved to profiles/accounts.json on every edit (not via saveConfiguration()), since it's shared by all profiles and only config.exe uses it.
+let accountsData = { version: 1, accounts: [], characters: [] };
+// Latest scanEveAccounts() result keyed by character ID; null until the first scan finishes.
+let accountScanById = null;
+let accountScanStarted = false;
+let accountCharacterQuery = '';
+
+const EVE_ID_PATTERN = /^\d+$/;
+
+async function loadAccountsData() {
+    if (typeof webui === 'undefined') return;
+    try {
+        const data = JSON.parse(await webui.call('loadAccounts'));
+        accountsData = {
+            version: 1,
+            accounts: Array.isArray(data.accounts) ? data.accounts : [],
+            // IDs are interpolated into onclick handlers, so anything non-numeric from a hand-edited file is dropped here.
+            characters: (Array.isArray(data.characters) ? data.characters : []).filter(c => EVE_ID_PATTERN.test(String(c.id))),
+        };
+    } catch (error) {
+        logError('Failed to load accounts:', error);
+    }
+    renderAccountsPanel();
+}
+
+async function saveAccountsData() {
+    if (typeof webui === 'undefined') return;
+    try {
+        const data = JSON.parse(await webui.call('saveAccounts', JSON.stringify(accountsData)));
+        if (!data.success) showStatus(t('status.accountsSaveFailed') + (data.error || t('status.unknownError')), 'error');
+    } catch (error) {
+        logError('Failed to save accounts:', error);
+        showStatus(t('status.accountsSaveFailed') + error.message, 'error');
+    }
+}
+
+async function scanEveAccounts() {
+    if (typeof webui === 'undefined') return;
+    accountScanStarted = true;
+    const btn = document.getElementById('scanEveAccountsBtn');
+    if (btn) btn.disabled = true;
+    setAccountScanSummary(t('dynamic.accounts.scanning'));
+
+    try {
+        const result = JSON.parse(await webui.call('scanEveAccounts'));
+        const scanned = (result.characters || []).filter(c => EVE_ID_PATTERN.test(String(c.id)));
+        accountScanById = new Map(scanned.map(c => [c.id, c]));
+
+        scanned.forEach(sc => {
+            let link = findAccountCharacter(sc.id);
+            if (!link) {
+                link = { id: sc.id, name: null, accountId: null, lastSeen: null };
+                accountsData.characters.push(link);
+            }
+            if (sc.name) link.name = sc.name;
+            if (!link.lastSeen || sc.lastSeen > link.lastSeen) link.lastSeen = sc.lastSeen;
+        });
+        await saveAccountsData();
+
+        const accountCount = new Set(scanned.map(c => c.suggestedUserId).filter(Boolean)).size;
+        setAccountScanSummary(t('status.accountsScanned')
+            .replace('{n}', String(scanned.length))
+            .replace('{m}', String(accountCount)));
+    } catch (error) {
+        logError('Failed to scan EVE accounts:', error);
+        setAccountScanSummary('');
+        showStatus(t('status.accountsScanFailed') + error.message, 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+        renderAccountsPanel();
+    }
+}
+
+function setAccountScanSummary(text) {
+    const el = document.getElementById('accountScanSummary');
+    if (el) el.textContent = text;
+}
+
+function findAccountCharacter(charId) {
+    return accountsData.characters.find(c => String(c.id) === String(charId));
+}
+
+function findAccount(accountId) {
+    return accountsData.accounts.find(a => a.id === accountId);
+}
+
+function accountForUserId(userId) {
+    return accountsData.accounts.find(a => (a.userIds || []).includes(userId));
+}
+
+function newAccountId() {
+    return 'acc_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function nextAccountName() {
+    const names = new Set(accountsData.accounts.map(a => a.name));
+    let n = accountsData.accounts.length + 1;
+    while (names.has(t('dynamic.accounts.newAccountName').replace('{n}', String(n)))) n++;
+    return t('dynamic.accounts.newAccountName').replace('{n}', String(n));
+}
+
+// Only unassigned characters get a suggestion - an explicit choice always wins over the mtime heuristic.
+function accountSuggestionFor(link) {
+    if (link.accountId && findAccount(link.accountId)) return null;
+    const userId = accountScanById?.get(String(link.id))?.suggestedUserId;
+    if (!userId) return null;
+    return { userId, account: accountForUserId(userId) || null };
+}
+
+function applyAccountSuggestion(link) {
+    const suggestion = accountSuggestionFor(link);
+    if (!suggestion) return false;
+    let account = suggestion.account;
+    if (!account) {
+        account = { id: newAccountId(), name: nextAccountName(), userIds: [suggestion.userId] };
+        accountsData.accounts.push(account);
+    }
+    link.accountId = account.id;
+    return true;
+}
+
+function acceptAccountSuggestion(charId) {
+    const link = findAccountCharacter(charId);
+    if (!link || !applyAccountSuggestion(link)) return;
+    saveAccountsData();
+    renderAccountsPanel();
+}
+
+function acceptAllAccountSuggestions() {
+    let accepted = 0;
+    accountsData.characters.forEach(link => {
+        if (applyAccountSuggestion(link)) accepted++;
+    });
+    if (accepted === 0) {
+        showStatus(t('status.accountsNoSuggestions'), 'info');
+        return;
+    }
+    saveAccountsData();
+    renderAccountsPanel();
+    showStatus(t('status.accountsSuggestionsAccepted').replace('{n}', String(accepted)), 'success');
+}
+
+// Linking by hand also records the character's detected EVE account ID on the chosen account (if no other account claims it), so later scans suggest that account for its other characters.
+function setCharacterAccount(charId, accountId) {
+    const link = findAccountCharacter(charId);
+    if (!link) return;
+    link.accountId = accountId || null;
+
+    const account = accountId ? findAccount(accountId) : null;
+    const userId = accountScanById?.get(String(charId))?.suggestedUserId;
+    if (account && userId && !accountForUserId(userId)) {
+        account.userIds = [...(account.userIds || []), userId];
+    }
+    saveAccountsData();
+    renderAccountsPanel();
+}
+
+function addAccount() {
+    accountsData.accounts.push({ id: newAccountId(), name: nextAccountName(), userIds: [] });
+    saveAccountsData();
+    renderAccountsPanel();
+    const input = document.getElementById(`account_${accountsData.accounts.length - 1}_name`);
+    if (input) {
+        input.focus();
+        input.select();
+    }
+}
+
+function renameAccount(index, name) {
+    const account = accountsData.accounts[index];
+    if (!account) return;
+    const trimmed = name.trim();
+    if (trimmed) account.name = trimmed;
+    saveAccountsData();
+    renderAccountsPanel();
+}
+
+function removeAccount(index) {
+    const account = accountsData.accounts[index];
+    if (!account) return;
+    accountsData.characters.forEach(c => {
+        if (c.accountId === account.id) c.accountId = null;
+    });
+    accountsData.accounts.splice(index, 1);
+    saveAccountsData();
+    renderAccountsPanel();
+}
+
+function onAccountCharacterSearchInput(query) {
+    accountCharacterQuery = query.toLowerCase().trim();
+    renderAccountCharacters();
+}
+
+function clearAccountCharacterSearch() {
+    const input = document.getElementById('accountCharacterFilter');
+    if (input) input.value = '';
+    accountCharacterQuery = '';
+    renderAccountCharacters();
+}
+
+function accountCharacterLabel(link) {
+    return link.name || `#${link.id}`;
+}
+
+function formatAccountTimestamp(seconds) {
+    if (!seconds) return '';
+    return new Date(seconds * 1000).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+}
+
+function renderAccountsPanel() {
+    renderAccountCharacters();
+    renderAccountsList();
+}
+
+function renderAccountCharacters() {
+    const container = document.getElementById('accountCharactersList');
+    if (!container) return;
+
+    if (accountsData.characters.length === 0) {
+        container.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.accounts.noCharacters'))}</p>`;
+        updateAcceptSuggestionsButton();
+        return;
+    }
+
+    // Unassigned first so what still needs doing sits at the top, then grouped by account.
+    const accountName = link => findAccount(link.accountId)?.name || '';
+    const rows = accountsData.characters
+        .filter(link => !accountCharacterQuery
+            || accountCharacterLabel(link).toLowerCase().includes(accountCharacterQuery)
+            || String(link.id).includes(accountCharacterQuery))
+        .sort((a, b) => {
+            const aName = accountName(a), bName = accountName(b);
+            if (!aName !== !bName) return aName ? 1 : -1;
+            return aName.localeCompare(bName) || accountCharacterLabel(a).localeCompare(accountCharacterLabel(b));
+        });
+
+    if (rows.length === 0) {
+        container.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.accounts.noMatches'))}</p>`;
+        updateAcceptSuggestionsButton();
+        return;
+    }
+
+    const accountOptions = accountsData.accounts
+        .map(a => `<option value="${escapeHtml(a.id)}">${escapeHtml(a.name)}</option>`)
+        .join('');
+
+    container.innerHTML = rows.map(link => {
+        const id = String(link.id);
+        const scanned = accountScanById?.get(id);
+        const meta = [`ID ${id}`];
+        if (link.lastSeen) meta.push(t('dynamic.accounts.lastLogin').replace('{date}', formatAccountTimestamp(link.lastSeen)));
+        if (accountScanById && !scanned) meta.push(t('dynamic.accounts.notInScan'));
+        const foldersTitle = scanned?.folders?.length
+            ? `${t('dynamic.accounts.foundIn')}\n${scanned.folders.join('\n')}`
+            : '';
+
+        const suggestion = accountSuggestionFor(link);
+        const suggestionHtml = suggestion ? `
+            <div class="account-char-suggestion">
+                <span>${escapeHtml(suggestion.account
+                    ? t('dynamic.accounts.suggested').replace('{account}', suggestion.account.name)
+                    : t('dynamic.accounts.suggestedNew').replace('{id}', suggestion.userId))}</span>
+                <button type="button" class="button-outline account-suggestion-accept" onclick="acceptAccountSuggestion('${id}')">${escapeHtml(t('dynamic.accounts.accept'))}</button>
+            </div>` : '';
+
+        return `
+            <div class="account-char-row">
+                <img class="character-portrait" src="https://images.evetech.net/characters/${id}/portrait?size=64" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
+                <div class="account-char-info">
+                    <div class="account-char-name">${escapeHtml(accountCharacterLabel(link))}</div>
+                    <div class="account-char-meta" title="${escapeHtml(foldersTitle)}">${escapeHtml(meta.join(' · '))}</div>
+                    ${suggestionHtml}
+                </div>
+                <select id="acctChar_${id}_account" data-untracked onchange="setCharacterAccount('${id}', this.value)">
+                    <option value="">${escapeHtml(t('dynamic.accounts.unassigned'))}</option>
+                    ${accountOptions}
+                </select>
+            </div>`;
+    }).join('');
+
+    rows.forEach(link => {
+        const select = document.getElementById(`acctChar_${link.id}_account`);
+        if (select) select.value = findAccount(link.accountId) ? link.accountId : '';
+    });
+    updateAcceptSuggestionsButton();
+}
+
+function updateAcceptSuggestionsButton() {
+    const btn = document.getElementById('acceptAccountSuggestionsBtn');
+    if (btn) btn.disabled = !accountsData.characters.some(link => accountSuggestionFor(link));
+}
+
+function renderAccountsList() {
+    const container = document.getElementById('accountsList');
+    if (!container) return;
+
+    if (accountsData.accounts.length === 0) {
+        container.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.accounts.noAccounts'))}</p>`;
+        return;
+    }
+
+    container.innerHTML = accountsData.accounts.map((account, index) => {
+        const members = accountsData.characters
+            .filter(c => c.accountId === account.id)
+            .map(accountCharacterLabel)
+            .sort((a, b) => a.localeCompare(b));
+        const countText = members.length === 1
+            ? t('dynamic.accounts.characterCountOne')
+            : t('dynamic.accounts.characterCount').replace('{n}', String(members.length));
+        const userIds = account.userIds || [];
+        const detail = [members.join(', ')];
+        if (userIds.length) detail.push(t('dynamic.accounts.eveAccountIds').replace('{ids}', userIds.join(', ')));
+
+        return `
+            <div class="account-row list-container">
+                <div class="field-row">
+                    <input type="text" id="account_${index}_name" data-untracked value="${escapeHtml(account.name)}" placeholder="${escapeHtml(t('dynamic.accounts.namePlaceholder'))}" onchange="renameAccount(${index}, this.value)">
+                    <span class="account-row-count">${escapeHtml(countText)}</span>
+                    <button type="button" class="button-remove" id="account_${index}_removeBtn" onclick="confirmRemove('account_${index}_removeBtn', () => removeAccount(${index}))">${escapeHtml(t('common.remove'))}</button>
+                </div>
+                ${detail.some(Boolean) ? `<div class="account-row-detail">${escapeHtml(detail.filter(Boolean).join(' · '))}</div>` : ''}
+            </div>`;
+    }).join('');
 }
 
 // Overwrites every character's saved position with the selected source window's current position.

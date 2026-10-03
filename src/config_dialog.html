@@ -51,6 +51,9 @@
                 <div class="tab-item" data-tab="characters">
                     <span class="tab-glyph" aria-hidden="true">☰</span><span data-i18n="tab.characters.title">characters</span>
                 </div>
+                <div class="tab-item" data-tab="accounts">
+                    <span class="tab-glyph" aria-hidden="true">◎</span><span data-i18n="tab.accounts.title">account config</span>
+                </div>
                 <div class="tab-item" data-tab="behavior">
                     <span class="tab-glyph" aria-hidden="true">✥</span><span data-i18n="tab.behavior.title">behavior</span>
                 </div>
@@ -1033,6 +1036,53 @@
                         <div class="button-row">
                             <button type="button" onclick="addCharacter()" data-i18n="button.add-character.label">+ Add Character</button>
                             <button type="button" id="populateCharactersBtn" onclick="populateCharactersFromClients()" data-i18n="common.populateFromClients">↻ Populate from Open Clients</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="panel-content" data-panel="accounts">
+                    <div class="section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.accounts.section.characters.heading">EVE Characters</h3>
+                            <div class="section-heading-actions">
+                                <span class="scope-chip" data-i18n="common.scopeGlobal">all profiles</span>
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
+                        </div>
+                        <p class="hint" data-i18n="tab.accounts.section.characters.hint">Every character that has logged in on this PC, found in EVE's settings folders (%LOCALAPPDATA%\CCP\EVE). Accounts are suggested by matching each character's settings file to the account settings file EVE saved at the same moment, so check a suggestion before accepting it. Changes save automatically.</p>
+
+                        <div class="search-input-wrapper search-input-wrapper-wide list-container">
+                            <input type="text" id="accountCharacterFilter" data-untracked class="search-filter-input" placeholder="Search characters..." data-i18n-placeholder="field.accountCharacterFilter.placeholder" oninput="onAccountCharacterSearchInput(this.value)" />
+                            <button type="button" class="button-clear" onclick="clearAccountCharacterSearch()" title="Clear search" data-i18n-title="common.clearSearchTitle">×</button>
+                        </div>
+
+                        <div id="accountCharactersList" class="list-container">
+                            <!-- Characters will be dynamically populated here -->
+                        </div>
+                        <p id="accountScanSummary" class="account-scan-summary"></p>
+
+                        <div class="button-row">
+                            <button type="button" id="scanEveAccountsBtn" onclick="scanEveAccounts()" data-i18n="button.scan-eve-accounts.label">↻ Scan EVE Settings</button>
+                            <button type="button" id="acceptAccountSuggestionsBtn" onclick="acceptAllAccountSuggestions()" data-i18n="button.accept-account-suggestions.label">✓ Accept All Suggestions</button>
+                        </div>
+                    </div>
+
+                    <div class="section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.accounts.section.accounts.heading">Accounts</h3>
+                            <div class="section-heading-actions">
+                                <span class="scope-chip" data-i18n="common.scopeGlobal">all profiles</span>
+                                <button class="button-icon hint-toggle" type="button" onclick="toggleSectionHint(this)" data-i18n-title="common.showHintTitle" title="Show hint">?</button>
+                            </div>
+                        </div>
+                        <p class="hint" data-i18n="tab.accounts.section.accounts.hint">Your EVE accounts. Add one, then pick it from a character's dropdown above to link them. Linking a character also records that account's EVE account ID, so future scans can suggest it automatically.</p>
+
+                        <div id="accountsList" class="list-container">
+                            <!-- Accounts will be dynamically populated here -->
+                        </div>
+
+                        <div class="button-row">
+                            <button type="button" onclick="addAccount()" data-i18n="button.add-account.label">+ Add Account</button>
                         </div>
                     </div>
                 </div>
