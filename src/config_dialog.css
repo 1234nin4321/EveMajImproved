@@ -3798,3 +3798,10 @@ button.confirm-delete:hover {
         animation: none;
     }
 }
+
+/* About: the improvements credit leads the Credits section. */
+.about-credit-improvements {
+    color: var(--color-accent);
+    font-weight: var(--fw-semibold);
+    font-style: normal;
+}
