@@ -4358,6 +4358,7 @@ function showUpdateAvailableModal(version, url, notes) {
     const linkEl = document.getElementById('update-available-link');
     const notesEl = document.getElementById('update-available-notes');
     const closeBtn = document.getElementById('update-available-modal-close');
+    const gotoBtn = document.getElementById('update-available-modal-goto');
 
     linkEl.href = url;
     linkEl.textContent = version || url;
@@ -4375,9 +4376,204 @@ function showUpdateAvailableModal(version, url, notes) {
     const handleClose = () => {
         modal.classList.remove('show');
         closeBtn.removeEventListener('click', handleClose);
+        gotoBtn.removeEventListener('click', handleGoto);
+    };
+    // Jumps to the About tab's updater, which re-checks so this process's backend has the release to download.
+    const handleGoto = () => {
+        handleClose();
+        switchTab('about');
+        document.getElementById('updates-section')?.scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+        checkForUpdatesNow();
     };
 
     closeBtn.addEventListener('click', handleClose);
+    gotoBtn.addEventListener('click', handleGoto);
+}
+
+// ---- In-dialog updater (About tab) ----
+// Each step is user-initiated: check, then download, then install behind a confirmation. The backend keeps the found/staged release between calls.
+let updaterVersion = null;
+let updaterBusy = false;
+
+function setUpdateStatusText(text, kind) {
+    const el = document.getElementById('update-status-text');
+    if (!el) return;
+    el.textContent = text;
+    el.dataset.kind = kind || '';
+}
+
+function setUpdateButtons({ download = false, install = false } = {}) {
+    const checkBtn = document.getElementById('checkUpdateBtn');
+    const downloadBtn = document.getElementById('downloadUpdateBtn');
+    const installBtn = document.getElementById('installUpdateBtn');
+    if (checkBtn) checkBtn.disabled = updaterBusy;
+    if (downloadBtn) {
+        downloadBtn.style.display = download ? '' : 'none';
+        downloadBtn.disabled = updaterBusy;
+    }
+    if (installBtn) {
+        installBtn.style.display = install ? '' : 'none';
+        installBtn.disabled = updaterBusy;
+    }
+}
+
+function updateErrorText(code) {
+    const key = `update.error.${code}`;
+    return (window.__I18N__ && key in window.__I18N__) ? t(key) : t('update.error.generic');
+}
+
+function formatUpdateSize(bytes) {
+    if (!bytes) return '';
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+async function checkForUpdatesNow() {
+    if (typeof webui === 'undefined' || updaterBusy) return;
+    updaterBusy = true;
+    setUpdateButtons();
+    setUpdateStatusText(t('update.status.checking'), 'info');
+    const details = document.getElementById('update-details');
+
+    try {
+        const data = JSON.parse(await webui.call('checkForUpdateNow'));
+        if (!data.success) {
+            if (details) details.style.display = 'none';
+            setUpdateStatusText(updateErrorText(data.error), 'error');
+            setUpdateButtons();
+            return;
+        }
+        if (!data.available) {
+            updaterVersion = null;
+            if (details) details.style.display = 'none';
+            setUpdateStatusText(t('update.status.upToDate').replace('{version}', data.currentVersion), 'success');
+            setUpdateButtons();
+            return;
+        }
+
+        updaterVersion = data.version;
+        const link = document.getElementById('update-version-link');
+        if (link) {
+            link.href = data.url;
+            link.textContent = data.version;
+        }
+        const meta = document.getElementById('update-asset-meta');
+        if (meta) {
+            const parts = [data.assetName, formatUpdateSize(data.assetSize)].filter(Boolean);
+            if (data.assetName && !data.hasDigest) parts.push(t('update.status.noDigest'));
+            meta.textContent = parts.length ? `(${parts.join(' · ')})` : '';
+        }
+        const notes = document.getElementById('update-notes');
+        if (notes) {
+            notes.textContent = data.notes || '';
+            notes.style.display = data.notes ? '' : 'none';
+        }
+        if (details) details.style.display = '';
+
+        if (!data.assetName) {
+            setUpdateStatusText(t('update.status.noAsset').replace('{current}', data.currentVersion), 'error');
+            setUpdateButtons();
+        } else if (data.staged) {
+            setUpdateStatusText(t('update.status.ready').replace('{version}', data.version), 'success');
+            setUpdateButtons({ install: true });
+        } else {
+            setUpdateStatusText(t('update.status.available').replace('{current}', data.currentVersion), 'info');
+            setUpdateButtons({ download: true });
+        }
+    } catch (error) {
+        logError('Update check failed:', error);
+        setUpdateStatusText(updateErrorText('check_failed'), 'error');
+        setUpdateButtons();
+    } finally {
+        updaterBusy = false;
+        refreshUpdateButtonsEnabled();
+    }
+}
+
+function refreshUpdateButtonsEnabled() {
+    ['checkUpdateBtn', 'downloadUpdateBtn', 'installUpdateBtn'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = updaterBusy;
+    });
+}
+
+async function downloadUpdateNow() {
+    if (typeof webui === 'undefined' || updaterBusy || !updaterVersion) return;
+    updaterBusy = true;
+    setUpdateButtons({ download: true });
+    setUpdateStatusText(t('update.status.downloading').replace('{version}', updaterVersion), 'info');
+
+    try {
+        const data = JSON.parse(await webui.call('downloadUpdate'));
+        if (!data.success) {
+            setUpdateStatusText(updateErrorText(data.error), 'error');
+            setUpdateButtons({ download: true });
+            return;
+        }
+        setUpdateStatusText(t('update.status.ready').replace('{version}', data.version), 'success');
+        setUpdateButtons({ install: true });
+    } catch (error) {
+        logError('Update download failed:', error);
+        setUpdateStatusText(updateErrorText('download_failed'), 'error');
+        setUpdateButtons({ download: true });
+    } finally {
+        updaterBusy = false;
+        refreshUpdateButtonsEnabled();
+    }
+}
+
+function showInstallUpdateModal(version) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('install-update-modal');
+        const body = document.getElementById('install-update-modal-body');
+        const unsaved = document.getElementById('install-update-modal-unsaved');
+        const confirmBtn = document.getElementById('install-update-modal-confirm');
+        const cancelBtn = document.getElementById('install-update-modal-cancel');
+
+        body.textContent = t('misc.install-update-body').replace('{version}', version);
+        unsaved.style.display = hasRealUnsavedChanges() ? '' : 'none';
+
+        // Re-parented to the end of <body> so it paints above any other open modal (see showUnsavedCloseModal).
+        document.body.appendChild(modal);
+        modal.classList.add('show');
+
+        const finish = (confirmed) => {
+            modal.classList.remove('show');
+            confirmBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            resolve(confirmed);
+        };
+        const onConfirm = () => finish(true);
+        const onCancel = () => finish(false);
+        confirmBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+    });
+}
+
+async function confirmInstallUpdate() {
+    if (typeof webui === 'undefined' || updaterBusy || !updaterVersion) return;
+    if (!(await showInstallUpdateModal(updaterVersion))) return;
+
+    updaterBusy = true;
+    setUpdateButtons({ install: true });
+    setUpdateStatusText(t('update.status.installing'), 'info');
+
+    try {
+        const data = JSON.parse(await webui.call('installUpdate'));
+        if (!data.success) {
+            setUpdateStatusText(updateErrorText(data.error), 'error');
+            updaterBusy = false;
+            setUpdateButtons({ install: true });
+            return;
+        }
+        // The install script waits for this process to exit before touching any files, so close straight away (bypassing the unsaved-changes prompt the user already confirmed past).
+        showStatus(t('update.status.installing'), 'info');
+        setTimeout(() => webui.call('closeDialog'), 600);
+    } catch (error) {
+        logError('Update install failed:', error);
+        setUpdateStatusText(updateErrorText('launch_failed'), 'error');
+        updaterBusy = false;
+        setUpdateButtons({ install: true });
+    }
 }
 
 // Opens in the OS default browser via the backend instead of letting the WebView2 host spawn a popup for a plain target="_blank" link.

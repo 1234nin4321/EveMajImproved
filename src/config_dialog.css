@@ -3149,3 +3149,44 @@ button.confirm-delete:hover {
 .account-scan-summary:empty {
     display: none;
 }
+
+/* About tab updater */
+.update-status {
+    font-size: var(--fs-body);
+    color: var(--color-text-secondary);
+    margin: 0 0 var(--space-2) 0;
+}
+
+.update-status[data-kind="success"] {
+    color: var(--color-success);
+}
+
+.update-status[data-kind="error"] {
+    color: var(--color-error);
+}
+
+.update-version-line {
+    margin: 0 0 var(--space-2) 0;
+}
+
+.update-asset-meta {
+    font-size: var(--fs-label);
+    color: var(--color-muted);
+}
+
+.update-notes {
+    max-height: 200px;
+    overflow-y: auto;
+    padding: var(--space-2);
+    white-space: pre-wrap;
+    font-size: var(--fs-label);
+    color: var(--color-text-secondary);
+    background: var(--color-bg);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius);
+}
+
+.update-unsaved-warning {
+    margin: 0 0 12px 0;
+    color: var(--color-error);
+}

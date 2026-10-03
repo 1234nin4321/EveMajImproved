@@ -582,6 +582,15 @@ pub extern "shell32" fn ShellExecuteA(
     lpDirectory: ?LPCSTR,
     nShowCmd: c_int,
 ) callconv(.c) ?HANDLE;
+/// Wide variant for paths that may contain non-ANSI characters (e.g. a Unicode Windows user name in %TEMP%).
+pub extern "shell32" fn ShellExecuteW(
+    hwnd: ?HWND,
+    lpOperation: [*:0]const u16,
+    lpFile: [*:0]const u16,
+    lpParameters: ?[*:0]const u16,
+    lpDirectory: ?[*:0]const u16,
+    nShowCmd: c_int,
+) callconv(.c) ?HANDLE;
 
 pub const SM_CXSCREEN = 0;
 pub const SM_CYSCREEN = 1;

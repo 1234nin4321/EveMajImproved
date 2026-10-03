@@ -31,7 +31,8 @@ It's **never** going to let you input broadcast, display cropped portions of you
 - **Combat DPS Overlay**: Real-time incoming/outgoing DPS per character
 - **Mining Rate Overlay**: Real-time units/min with laser-idle and mining-stopped alerts
 - **Protocol Handler**: `evemajpreview://` URLs for external control - character switching, profile loading, hotkeys, etc
-- **Automatic Update Checks**: Checks GitHub for new releases on startup, only informs but will never automatically download 
+- **Automatic Update Checks**: Checks GitHub for new releases on startup and only informs - nothing downloads on its own
+- **In-App Updater**: The configuration editor's About tab can check for, download (checksum-verified) and install a new release, always asking you to confirm before installing
 - **No Telemetry**: I don't need to know you're using the app, that's insane
 
 ## Installation

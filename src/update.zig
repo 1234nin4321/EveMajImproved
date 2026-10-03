@@ -7,6 +7,9 @@ const slog = log.scoped("update");
 
 var g_io: std.Io = undefined;
 
+/// GitHub "owner/name" that update checks and downloads come from.
+pub const REPO = "1234nin4321/EveMajImproved";
+
 /// Must be called once before any update-checking function is used.
 pub fn setIo(io: std.Io) void {
     g_io = io;
@@ -136,7 +139,7 @@ pub const UpdateChecker = struct {
         defer client.deinit();
 
         // per_page=100 covers skipping many releases at once; unauthenticated requests only ever see published (non-draft) releases anyway.
-        const body = http_client.fetch(self.allocator, &client, "https://api.github.com/repos/mrmjstc/eve-maj-preview/releases?per_page=100", .{
+        const body = http_client.fetch(self.allocator, &client, "https://api.github.com/repos/" ++ REPO ++ "/releases?per_page=100", .{
             .extra_headers = &.{.{ .name = "Accept", .value = "application/vnd.github+json" }},
         }) orelse return error.FetchFailed;
         defer self.allocator.free(body);
@@ -174,6 +177,7 @@ pub const UpdateChecker = struct {
 
         var latest_version: ?[]const u8 = null;
         var latest_url: ?[]const u8 = null;
+        var latest_asset: ?ReleaseAsset = null;
 
         var notes_buf: std.ArrayList(u8) = .empty;
         defer notes_buf.deinit(self.allocator);
@@ -200,6 +204,7 @@ pub const UpdateChecker = struct {
             if (latest_version == null) {
                 latest_version = tag_name.string;
                 latest_url = html_url.string;
+                latest_asset = findPortableZip(release);
             }
 
             const release_notes = if (release.get("body")) |body_value|
@@ -221,11 +226,48 @@ pub const UpdateChecker = struct {
         }
 
         slog.info("Update available: {s} -> {s}", .{ self.current_version, latest_version.? });
-        return UpdateInfo{
+        var info = UpdateInfo{
             .version = try self.allocator.dupe(u8, latest_version.?),
             .url = try self.allocator.dupe(u8, latest_url.?),
-            .notes = if (notes_buf.items.len > 0) try self.allocator.dupe(u8, notes_buf.items) else null,
+            .notes = null,
         };
+        errdefer info.deinit(self.allocator);
+        if (notes_buf.items.len > 0) info.notes = try self.allocator.dupe(u8, notes_buf.items);
+        if (latest_asset) |a| {
+            info.asset_url = try self.allocator.dupe(u8, a.url);
+            info.asset_name = try self.allocator.dupe(u8, a.name);
+            info.asset_size = a.size;
+            if (a.digest) |d| info.asset_digest = try self.allocator.dupe(u8, d);
+        }
+        return info;
+    }
+
+    const ReleaseAsset = struct {
+        url: []const u8,
+        name: []const u8,
+        size: u64,
+        digest: ?[]const u8,
+    };
+
+    /// The release's "-portable.zip" asset (what the in-dialog updater installs), falling back to any .zip; null if it has none.
+    fn findPortableZip(release: std.json.ObjectMap) ?ReleaseAsset {
+        const assets = release.get("assets") orelse return null;
+        if (assets != .array) return null;
+        var fallback: ?ReleaseAsset = null;
+        for (assets.array.items) |asset_value| {
+            if (asset_value != .object) continue;
+            const asset = asset_value.object;
+            const name = asset.get("name") orelse continue;
+            const url = asset.get("browser_download_url") orelse continue;
+            if (name != .string or url != .string) continue;
+            if (!std.ascii.endsWithIgnoreCase(name.string, ".zip")) continue;
+            const size: u64 = if (asset.get("size")) |sz| (if (sz == .integer and sz.integer > 0) @intCast(sz.integer) else 0) else 0;
+            const digest: ?[]const u8 = if (asset.get("digest")) |d| (if (d == .string) d.string else null) else null;
+            const found: ReleaseAsset = .{ .url = url.string, .name = name.string, .size = size, .digest = digest };
+            if (std.ascii.endsWithIgnoreCase(name.string, "-portable.zip")) return found;
+            if (fallback == null) fallback = found;
+        }
+        return fallback;
     }
 
     pub fn checkForUpdatesBackground(allocator: std.mem.Allocator) void {
@@ -236,10 +278,9 @@ pub const UpdateChecker = struct {
             return;
         };
 
-        if (update_info) |info| {
-            defer allocator.free(info.version);
-            defer allocator.free(info.url);
-            defer if (info.notes) |n| allocator.free(n);
+        if (update_info) |info_const| {
+            var info = info_const;
+            defer info.deinit(allocator);
 
             g_update_status.set(allocator, info.version, info.url, info.notes) catch |err| {
                 slog.warn("Failed to store update status: {}", .{err});
@@ -254,11 +295,26 @@ pub const UpdateInfo = struct {
     version: []const u8,
     url: []const u8,
     notes: ?[]const u8,
+    /// The newest release's portable zip, for the config dialog's in-place updater; null if that release has no zip attached.
+    asset_url: ?[]const u8 = null,
+    asset_name: ?[]const u8 = null,
+    asset_size: u64 = 0,
+    /// GitHub's "sha256:<hex>" asset digest, when the release has one.
+    asset_digest: ?[]const u8 = null,
+
+    pub fn deinit(self: *UpdateInfo, allocator: std.mem.Allocator) void {
+        allocator.free(self.version);
+        allocator.free(self.url);
+        if (self.notes) |n| allocator.free(n);
+        if (self.asset_url) |u| allocator.free(u);
+        if (self.asset_name) |n| allocator.free(n);
+        if (self.asset_digest) |d| allocator.free(d);
+    }
 };
 
 pub fn openReleasesPage() void {
     var url_buffer: [512]u8 = undefined;
-    const url = g_update_status.copyUrlZ(&url_buffer) orelse "https://github.com/mrmjstc/eve-maj-preview/releases";
+    const url = g_update_status.copyUrlZ(&url_buffer) orelse "https://github.com/" ++ REPO ++ "/releases";
 
     slog.info("Opening releases page: {s}", .{url});
 

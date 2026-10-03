@@ -110,6 +110,25 @@
                         </div>
                     </div>
 
+                    <div class="section" id="updates-section">
+                        <div class="section-heading">
+                            <h3 data-i18n="tab.about.section.updates.heading">Updates</h3>
+                        </div>
+                        <p id="update-status-text" class="update-status" data-i18n="update.status.idle">Check GitHub for a newer release. Nothing is downloaded or installed without your say-so.</p>
+                        <div id="update-details" class="update-details" style="display: none;">
+                            <p class="update-version-line">
+                                <a id="update-version-link" href="#" onclick="return openExternalLink(event)" class="external-link"></a>
+                                <span id="update-asset-meta" class="update-asset-meta"></span>
+                            </p>
+                            <div id="update-notes" class="update-notes" style="display: none;"></div>
+                        </div>
+                        <div class="button-row">
+                            <button type="button" id="checkUpdateBtn" onclick="checkForUpdatesNow()" data-i18n="button.check-update.label">↻ Check for Updates</button>
+                            <button type="button" id="downloadUpdateBtn" onclick="downloadUpdateNow()" style="display: none;" data-i18n="button.download-update.label">⇩ Download Update</button>
+                            <button type="button" id="installUpdateBtn" class="button-primary" onclick="confirmInstallUpdate()" style="display: none;" data-i18n="button.install-update.label">Install Update</button>
+                        </div>
+                    </div>
+
                     <div class="section">
                         <div class="section-heading">
                             <h3 data-i18n="tab.about.section.credits.heading">Credits</h3>
@@ -2737,7 +2756,20 @@
             </p>
             <div id="update-available-notes" style="display: none; white-space: pre-wrap; text-align: left; margin: 0 0 12px 0;"></div>
             <div class="modal-buttons">
+                <button id="update-available-modal-goto" class="button-primary" data-i18n="button.update-available-goto.label">Get Update</button>
                 <button id="update-available-modal-close" class="button-outline" data-i18n="common.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="install-update-modal" class="modal">
+        <div class="modal-content">
+            <h3 data-i18n="misc.install-update-heading">Install Update?</h3>
+            <p id="install-update-modal-body" style="margin: 0 0 12px 0;"></p>
+            <p id="install-update-modal-unsaved" class="update-unsaved-warning" style="display: none;" data-i18n="misc.install-update-unsaved">This profile has unsaved changes. They will be lost if you install now.</p>
+            <div class="modal-buttons">
+                <button id="install-update-modal-confirm" class="button-primary" data-i18n="button.install-update-confirm.label">Install and Restart</button>
+                <button id="install-update-modal-cancel" class="button-outline" data-i18n="common.cancel">Cancel</button>
             </div>
         </div>
     </div>
