@@ -375,6 +375,13 @@
                                 <button type="button" id="editRegionButton" onclick="startRegionSelectFlow(REGION_FIELD_IDS, true)" data-i18n="field.editRegion.button" disabled>✎ Edit Region</button>
                                 <button type="button" id="clearRegionButton" class="button-icon button-icon-danger" onclick="confirmRemove('clearRegionButton', () => clearRegion(REGION_FIELD_IDS), '✓')" title="Clear region" data-i18n-title="field.clearRegion.title" disabled>&times;</button>
                             </div>
+                            <div id="displayRegionsBlock" class="display-regions-block" style="display: none;">
+                                <div class="display-regions-block-text">
+                                    <span class="display-regions-block-title" data-i18n="field.displayRegions.title">Display Regions</span>
+                                    <span id="displayRegionsSummary" class="display-regions-block-summary"></span>
+                                </div>
+                                <button type="button" onclick="openDisplayRegionsModal()" data-i18n="button.manage-display-regions.label">▦ Manage Display Regions</button>
+                            </div>
                             <!-- Bound via CONFIG_SCHEMA; not something a user needs to see or edit. -->
                             <div class="binding-list" style="display: none;">
                                 <div class="binding">
@@ -2784,6 +2791,30 @@
             <div class="modal-buttons">
                 <button id="update-available-modal-goto" class="button-primary" data-i18n="button.update-available-goto.label">Get Update</button>
                 <button id="update-available-modal-close" class="button-outline" data-i18n="common.close">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="display-regions-modal" class="modal">
+        <div class="modal-content modal-wide">
+            <h3 data-i18n="misc.display-regions-heading">Display Regions</h3>
+            <p id="displayRegionsSubtitle" class="hint" style="margin: 0 0 8px 0;"></p>
+            <div class="display-regions-size" id="displayRegionsSize">
+                <span class="display-regions-size-label" data-i18n="field.displayRegionsSize.label">Split</span>
+                <button type="button" data-size="0" data-i18n="dynamic.displayRegions.off">Off</button>
+                <button type="button" data-size="1">1×1</button>
+                <button type="button" data-size="2">2×2</button>
+                <button type="button" data-size="3">3×3</button>
+                <button type="button" data-size="4">4×4</button>
+            </div>
+            <div class="display-regions-body">
+                <div id="displayRegionsGrid" class="display-regions-grid"></div>
+                <div id="displayRegionsEditor" class="display-regions-editor"></div>
+            </div>
+            <p class="hint" style="margin: 8px 0 12px 0;" data-i18n="misc.display-regions-rules">A character goes to the first region that claims it: Client, then Custom, then Account, then Everyone Else. Characters no region claims keep their own saved position.</p>
+            <div class="modal-buttons">
+                <button type="button" id="display-regions-apply" class="button-primary" data-i18n="button.display-regions-apply.label">Apply</button>
+                <button type="button" id="display-regions-cancel" class="button-outline" data-i18n="common.cancel">Cancel</button>
             </div>
         </div>
     </div>

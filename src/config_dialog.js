@@ -995,6 +995,7 @@ function buildThumbnailPreviewPatch(includePositions = false) {
             regionY: getNullableFieldValue('regionY'),
             regionWidth: getNullableFieldValue('regionWidth'),
             regionHeight: getNullableFieldValue('regionHeight'),
+            displayGrid: currentDisplayGrid(),
             notLoggedInSpaceEnabled: getFieldValue('notLoggedInSpaceEnabled'),
             notLoggedInSpaceSpacing: getFieldValue('notLoggedInSpaceSpacing'),
             notLoggedInSpaceLimitToThumbnailSize: getFieldValue('notLoggedInSpaceLimitToThumbnailSize'),
@@ -1554,6 +1555,7 @@ function refreshRegionButtons() {
             if (button) button.disabled = disabled;
         }
     }
+    updateDisplayRegionsBlock();
 }
 
 function clearRegion(fieldIds) {
@@ -1564,6 +1566,271 @@ function clearRegion(fieldIds) {
     refreshRegionButtons();
     markAsChanged();
     scheduleThumbnailPreview();
+}
+
+// ---- Display Regions (Thumbnail Space split into an NxN grid; see display_grid.zig) ----
+const DISPLAY_REGION_KINDS = ['Empty', 'EveryoneElse', 'Custom', 'Client', 'Account'];
+let displayRegionsDisplays = null;
+let displayRegionsDraft = null;
+let displayRegionsSelectedCell = 0;
+
+function currentDisplayGrid() {
+    const grid = currentConfig?.display?.displayGrid;
+    return grid && Number.isInteger(grid.size) ? grid : { size: 0, slots: [] };
+}
+
+// The display the Thumbnail Space region exactly covers (full bounds or work area), if any.
+function displayMatchingRegion(displays) {
+    const r = currentRegionValues(REGION_FIELD_IDS);
+    if (!r || !displays) return null;
+    const same = (rect) => rect.x === r[0] && rect.y === r[1] && rect.width === r[2] && rect.height === r[3];
+    return displays.find(d => same(d.bounds) || same(d.workArea)) || null;
+}
+
+async function fetchDisplaysForRegions(force = false) {
+    if (displayRegionsDisplays && !force) return displayRegionsDisplays;
+    if (typeof webui === 'undefined') return null;
+    try {
+        displayRegionsDisplays = JSON.parse(await webui.call('getDisplays')).displays || [];
+    } catch (error) {
+        logWarn('Failed to load displays for Display Regions:', error);
+        displayRegionsDisplays = null;
+    }
+    return displayRegionsDisplays;
+}
+
+function displayGridSummary(grid) {
+    if (!grid.size) return t('dynamic.displayRegions.summaryOff');
+    const cells = grid.size * grid.size;
+    const used = (grid.slots || []).slice(0, cells).filter(s => s && s.kind && s.kind !== 'Empty').length;
+    return t('dynamic.displayRegions.summary')
+        .replaceAll('{n}', String(grid.size))
+        .replace('{used}', String(used))
+        .replace('{cells}', String(cells));
+}
+
+// Shown once the region is a full display (or a grid is already set up, so it can't get stranded if displays change).
+async function updateDisplayRegionsBlock() {
+    const block = document.getElementById('displayRegionsBlock');
+    if (!block) return;
+    const grid = currentDisplayGrid();
+    const hasRegion = !!currentRegionValues(REGION_FIELD_IDS);
+    const displays = hasRegion ? await fetchDisplaysForRegions() : null;
+    const match = displayMatchingRegion(displays);
+    block.style.display = hasRegion && (match || grid.size) ? '' : 'none';
+    const summary = document.getElementById('displayRegionsSummary');
+    if (summary) summary.textContent = displayGridSummary(grid);
+}
+
+function displayRegionCharacterNames() {
+    const names = new Map();
+    (currentConfig?.characters || []).forEach(c => { if (c.name && c.name.trim()) names.set(c.name.trim().toLowerCase(), c.name.trim()); });
+    (accountsData?.characters || []).forEach(c => { if (c.name) names.set(c.name.toLowerCase(), c.name); });
+    return [...names.values()].sort((a, b) => a.localeCompare(b));
+}
+
+function normalizeDisplayRegionSlot(slot) {
+    const kind = DISPLAY_REGION_KINDS.includes(slot?.kind) ? slot.kind : 'Empty';
+    return {
+        kind,
+        account: kind === 'Account' ? (slot.account || null) : null,
+        characters: kind === 'Custom' ? [...(slot.characters || [])]
+            : kind === 'Client' ? (slot.characters || []).slice(0, 1)
+            : [],
+    };
+}
+
+function setDisplayRegionsSize(size) {
+    const draft = displayRegionsDraft;
+    const cells = size * size;
+    const slots = draft.slots.slice(0, Math.max(cells, draft.slots.length));
+    while (slots.length < cells) slots.push({ kind: 'Empty', account: null, characters: [] });
+    // A fresh grid starts with a catch-all, so nothing disappears the moment it's switched on.
+    if (!draft.size && size && slots.slice(0, cells).every(s => s.kind === 'Empty')) slots[0] = { kind: 'EveryoneElse', account: null, characters: [] };
+    draft.size = size;
+    draft.slots = slots;
+    if (displayRegionsSelectedCell >= cells) displayRegionsSelectedCell = 0;
+    renderDisplayRegionsModal();
+}
+
+function selectDisplayRegionCell(index) {
+    displayRegionsSelectedCell = index;
+    renderDisplayRegionsModal();
+}
+
+function displayRegionCellLabel(slot) {
+    switch (slot.kind) {
+        case 'EveryoneElse': return t('dynamic.displayRegions.kind.EveryoneElse');
+        case 'Custom': return slot.characters.length
+            ? `${t('dynamic.displayRegions.kind.Custom')}: ${slot.characters.join(', ')}`
+            : t('dynamic.displayRegions.kind.Custom');
+        case 'Client': return slot.characters[0] || t('dynamic.displayRegions.kind.Client');
+        case 'Account': {
+            const acct = findAccount(slot.account);
+            return acct ? `${t('dynamic.displayRegions.kind.Account')}: ${acct.name}` : t('dynamic.displayRegions.kind.Account');
+        }
+        default: return t('dynamic.displayRegions.kind.Empty');
+    }
+}
+
+function renderDisplayRegionsModal() {
+    const draft = displayRegionsDraft;
+    document.querySelectorAll('#displayRegionsSize button[data-size]').forEach(btn => {
+        btn.classList.toggle('is-selected', Number(btn.dataset.size) === draft.size);
+    });
+
+    const gridEl = document.getElementById('displayRegionsGrid');
+    const editor = document.getElementById('displayRegionsEditor');
+    if (!draft.size) {
+        gridEl.innerHTML = `<p class="account-empty">${escapeHtml(t('dynamic.displayRegions.offHint'))}</p>`;
+        gridEl.style.gridTemplateColumns = '';
+        gridEl.style.aspectRatio = '';
+        editor.innerHTML = '';
+        return;
+    }
+
+    const region = currentRegionValues(REGION_FIELD_IDS);
+    gridEl.style.gridTemplateColumns = `repeat(${draft.size}, 1fr)`;
+    gridEl.style.aspectRatio = region ? `${region[2]} / ${region[3]}` : '16 / 9';
+    const cells = draft.size * draft.size;
+    gridEl.innerHTML = draft.slots.slice(0, cells).map((slot, i) => `
+        <button type="button" class="display-region-cell kind-${slot.kind}${i === displayRegionsSelectedCell ? ' is-selected' : ''}" onclick="selectDisplayRegionCell(${i})">
+            <span class="display-region-cell-number">${i + 1}</span>
+            <span class="display-region-cell-label">${escapeHtml(displayRegionCellLabel(slot))}</span>
+        </button>`).join('');
+
+    renderDisplayRegionEditor();
+}
+
+function renderDisplayRegionEditor() {
+    const editor = document.getElementById('displayRegionsEditor');
+    const slot = displayRegionsDraft.slots[displayRegionsSelectedCell];
+    const kindOptions = DISPLAY_REGION_KINDS.map(k =>
+        `<option value="${k}"${slot.kind === k ? ' selected' : ''}>${escapeHtml(t(`dynamic.displayRegions.kind.${k}`))}</option>`).join('');
+
+    let body = '';
+    if (slot.kind === 'Custom') {
+        const names = displayRegionCharacterNames();
+        const chosen = new Set(slot.characters.map(n => n.toLowerCase()));
+        body = names.length === 0
+            ? `<p class="account-empty">${escapeHtml(t('dynamic.displayRegions.noCharacters'))}</p>`
+            : `<div class="display-region-checklist">${names.map((n, i) => `
+                <label>
+                    <input type="checkbox" data-untracked data-name="${escapeHtml(n)}" id="drChar_${i}" ${chosen.has(n.toLowerCase()) ? 'checked' : ''} onchange="onDisplayRegionCustomToggle()">
+                    <span class="label-body">${escapeHtml(n)}</span>
+                </label>`).join('')}</div>`;
+    } else if (slot.kind === 'Client') {
+        const names = displayRegionCharacterNames();
+        body = `
+            <label for="drClient" class="display-region-field-label">${escapeHtml(t('dynamic.displayRegions.clientLabel'))}</label>
+            <select id="drClient" data-untracked onchange="onDisplayRegionClientChange(this.value)">
+                <option value="">${escapeHtml(t('dynamic.displayRegions.choose'))}</option>
+                ${names.map(n => `<option value="${escapeHtml(n)}"${slot.characters[0] === n ? ' selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+            </select>`;
+    } else if (slot.kind === 'Account') {
+        const accounts = accountsData?.accounts || [];
+        if (accounts.length === 0) {
+            body = `<p class="account-empty">${escapeHtml(t('dynamic.displayRegions.noAccounts'))}</p>
+                <button type="button" class="button-outline" onclick="goToAccountConfigFromRegions()">${escapeHtml(t('dynamic.displayRegions.openAccountConfig'))}</button>`;
+        } else {
+            const members = slot.account
+                ? accountsData.characters.filter(c => c.accountId === slot.account).map(accountCharacterLabel).sort((a, b) => a.localeCompare(b))
+                : [];
+            body = `
+                <label for="drAccount" class="display-region-field-label">${escapeHtml(t('dynamic.displayRegions.accountLabel'))}</label>
+                <select id="drAccount" data-untracked onchange="onDisplayRegionAccountChange(this.value)">
+                    <option value="">${escapeHtml(t('dynamic.displayRegions.choose'))}</option>
+                    ${accounts.map(a => `<option value="${escapeHtml(a.id)}"${slot.account === a.id ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('')}
+                </select>
+                ${slot.account ? `<p class="display-region-members">${escapeHtml(members.length ? members.join(', ') : t('dynamic.displayRegions.accountEmpty'))}</p>` : ''}`;
+        }
+    } else {
+        body = `<p class="account-empty">${escapeHtml(t(`dynamic.displayRegions.hint.${slot.kind}`))}</p>`;
+    }
+
+    editor.innerHTML = `
+        <div class="display-region-editor-title">${escapeHtml(t('dynamic.displayRegions.regionTitle').replace('{n}', String(displayRegionsSelectedCell + 1)))}</div>
+        <label for="drKind" class="display-region-field-label">${escapeHtml(t('dynamic.displayRegions.layoutLabel'))}</label>
+        <select id="drKind" data-untracked onchange="onDisplayRegionKindChange(this.value)">${kindOptions}</select>
+        ${body}`;
+}
+
+function onDisplayRegionKindChange(kind) {
+    const slot = displayRegionsDraft.slots[displayRegionsSelectedCell];
+    displayRegionsDraft.slots[displayRegionsSelectedCell] = normalizeDisplayRegionSlot({ ...slot, kind });
+    renderDisplayRegionsModal();
+}
+
+function onDisplayRegionCustomToggle() {
+    const slot = displayRegionsDraft.slots[displayRegionsSelectedCell];
+    slot.characters = [...document.querySelectorAll('#displayRegionsEditor input[type="checkbox"]:checked')].map(cb => cb.dataset.name);
+    renderDisplayRegionsModal();
+}
+
+function onDisplayRegionClientChange(name) {
+    displayRegionsDraft.slots[displayRegionsSelectedCell].characters = name ? [name] : [];
+    renderDisplayRegionsModal();
+}
+
+function onDisplayRegionAccountChange(accountId) {
+    displayRegionsDraft.slots[displayRegionsSelectedCell].account = accountId || null;
+    renderDisplayRegionsModal();
+}
+
+function goToAccountConfigFromRegions() {
+    document.getElementById('display-regions-cancel')?.click();
+    switchTab('accounts');
+}
+
+async function openDisplayRegionsModal() {
+    const grid = currentDisplayGrid();
+    displayRegionsDraft = {
+        size: grid.size || 0,
+        slots: (grid.slots || []).map(normalizeDisplayRegionSlot),
+    };
+    displayRegionsSelectedCell = 0;
+    if (displayRegionsDraft.size) setDisplayRegionsSize(displayRegionsDraft.size);
+
+    const displays = await fetchDisplaysForRegions(true);
+    const match = displayMatchingRegion(displays);
+    const region = currentRegionValues(REGION_FIELD_IDS);
+    const subtitle = document.getElementById('displayRegionsSubtitle');
+    if (subtitle) {
+        subtitle.textContent = match
+            ? t('dynamic.displayRegions.subtitle').replace('{n}', String(match.number)).replace('{name}', match.name).replace('{w}', String(region[2])).replace('{h}', String(region[3]))
+            : t('dynamic.displayRegions.subtitleNoDisplay');
+    }
+
+    const modal = document.getElementById('display-regions-modal');
+    const applyBtn = document.getElementById('display-regions-apply');
+    const cancelBtn = document.getElementById('display-regions-cancel');
+    const sizeButtons = [...document.querySelectorAll('#displayRegionsSize button[data-size]')];
+    renderDisplayRegionsModal();
+    document.body.appendChild(modal);
+    modal.classList.add('show');
+
+    const onSize = (e) => setDisplayRegionsSize(Number(e.currentTarget.dataset.size));
+    const finish = () => {
+        modal.classList.remove('show');
+        applyBtn.removeEventListener('click', onApply);
+        cancelBtn.removeEventListener('click', onCancel);
+        sizeButtons.forEach(b => b.removeEventListener('click', onSize));
+    };
+    const onApply = () => {
+        const size = displayRegionsDraft.size;
+        currentConfig.display.displayGrid = size
+            ? { size, slots: displayRegionsDraft.slots.slice(0, size * size).map(normalizeDisplayRegionSlot) }
+            : { size: 0, slots: [] };
+        finish();
+        markAsChanged();
+        scheduleThumbnailPreview();
+        updateDisplayRegionsBlock();
+        showStatus(t('status.displayRegionsApplied'), 'success');
+    };
+    const onCancel = () => finish();
+    applyBtn.addEventListener('click', onApply);
+    cancelBtn.addEventListener('click', onCancel);
+    sizeButtons.forEach(b => b.addEventListener('click', onSize));
 }
 
 // Asks how to set a new Thumbnail Space region. Resolves to { mode: 'draw' }, { mode: 'display', rect }, or null if cancelled.

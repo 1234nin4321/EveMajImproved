@@ -4,6 +4,7 @@ const log = @import("log.zig");
 const vk = @import("virtual_keys.zig");
 const state_mod = @import("state.zig");
 const types = @import("types.zig");
+pub const display_grid = @import("display_grid.zig");
 const color = @import("color.zig");
 
 const slog = log.scoped("config");
@@ -2181,8 +2182,11 @@ pub const Config = struct {
         cfg.timer = w.timer;
         // Otherwise these dangle once parsed_wire's arena frees - dupe like ThumbnailConfig.fromWire does.
         cfg.display = w.display;
+        // Cleared before the dupes below, so an errdefer'd deinit never frees parsed_wire's arena-owned grid.
+        cfg.display.displayGrid = .{};
         cfg.display.listViewFontName = try allocator.dupe(u8, w.display.listViewFontName);
         cfg.display.notifInfoPanelFontName = try allocator.dupe(u8, w.display.notifInfoPanelFontName);
+        cfg.display.displayGrid = try w.display.displayGrid.clone(allocator);
         cfg.snapping = w.snapping;
         cfg.interaction = w.interaction;
         cfg.autoMinimize = w.autoMinimize;
@@ -2807,6 +2811,9 @@ pub const Config = struct {
         /// Same as `hideThumbnailsDuringRegionSelect`, for the not-logged-in space's region.
         notLoggedInSpaceHideThumbnailsDuringRegionSelect: bool = true,
 
+        /// Display Regions: splits the RegionFit region into an NxN grid whose cells each claim specific thumbnails (see display_grid.zig). Owned strings; size 0 = off.
+        displayGrid: display_grid.DisplayGrid = .{},
+
         monitorIndex: ?u32 = null,
         useMonitorWorkArea: bool = true,
 
@@ -2854,6 +2861,8 @@ pub const Config = struct {
             if (self.notifInfoPanelHeight > NOTIF_PANEL_HEIGHT_MAX) self.notifInfoPanelHeight = NOTIF_PANEL_HEIGHT_MAX;
             if (self.notifInfoPanelMaxRows < NOTIF_PANEL_MAX_ROWS_MIN) self.notifInfoPanelMaxRows = NOTIF_PANEL_MAX_ROWS_MIN;
             if (self.notifInfoPanelMaxRows > NOTIF_PANEL_MAX_ROWS_MAX) self.notifInfoPanelMaxRows = NOTIF_PANEL_MAX_ROWS_MAX;
+
+            self.displayGrid.validate();
 
             if (self.spacing < SPACING_MIN) self.spacing = SPACING_MIN;
             if (self.spacing > SPACING_MAX) {
@@ -3666,6 +3675,14 @@ pub const Config = struct {
     }
 
     pub fn parseJsonDisplayConfig(display: *DisplayConfig, obj: std.json.ObjectMap, allocator: std.mem.Allocator) !void {
+        if (obj.get("displayGrid")) |v| {
+            if (v == .object) {
+                // Parsed fully before the old grid is freed, so a bad patch leaves the current layout intact.
+                const new_grid = try display_grid.DisplayGrid.fromJsonValue(allocator, v);
+                display.displayGrid.deinit(allocator);
+                display.displayGrid = new_grid;
+            }
+        }
         if (obj.get("startX")) |v| {
             if (v == .integer) display.startX = std.math.cast(i32, v.integer) orelse display.startX;
         }
@@ -4432,6 +4449,7 @@ pub const Config = struct {
         freeFontNameIfOwned(allocator, self.thumbnail.notifications.font_name);
         freeFontNameIfOwned(allocator, self.display.listViewFontName);
         freeFontNameIfOwned(allocator, self.display.notifInfoPanelFontName);
+        self.display.displayGrid.deinit(allocator);
 
         var type_config_it = self.thumbnail.notifications.type_configs.iterator();
         while (type_config_it.next()) |entry| {
@@ -4525,6 +4543,8 @@ pub const Config = struct {
         const new_not_logged_in_space_height = fresh.display.notLoggedInSpaceHeight;
         const new_not_logged_in_space_spacing = fresh.display.notLoggedInSpaceSpacing;
         const new_not_logged_in_space_limit_to_thumbnail_size = fresh.display.notLoggedInSpaceLimitToThumbnailSize;
+        const new_display_grid = fresh.display.displayGrid;
+        fresh.display.displayGrid = .{};
 
         // Index-matched, like applyGroupBadgePreviewFromJson.
         for (self.hotkeyGroups.items, 0..) |*group, group_index| {
@@ -4616,6 +4636,8 @@ pub const Config = struct {
         self.display.notLoggedInSpaceHeight = new_not_logged_in_space_height;
         self.display.notLoggedInSpaceSpacing = new_not_logged_in_space_spacing;
         self.display.notLoggedInSpaceLimitToThumbnailSize = new_not_logged_in_space_limit_to_thumbnail_size;
+        self.display.displayGrid.deinit(allocator);
+        self.display.displayGrid = new_display_grid;
     }
 
     /// Live-preview only: per-group badge flags in the config dialog's group order, matched to the running groups by index.

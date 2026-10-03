@@ -14,9 +14,10 @@ pub fn init(allocator: std.mem.Allocator, io: std.Io) void {
     g_io = io;
 }
 
-/// Account Config's own file, separate from global.settings.json since only config.exe reads or writes it.
-pub const ACCOUNTS_FILE = "profiles/accounts.json";
-const MAX_ACCOUNTS_FILE_SIZE: usize = 1024 * 1024;
+const accounts_store = @import("accounts_store.zig");
+pub const ACCOUNTS_FILE = accounts_store.ACCOUNTS_FILE;
+const MAX_ACCOUNTS_FILE_SIZE = accounts_store.MAX_FILE_SIZE;
+pub const AccountsFile = accounts_store.AccountsFile;
 
 const ESI_NAMES_URL = "https://esi.evetech.net/latest/universe/names/?datasource=tranquility";
 /// ESI's documented per-request cap for /universe/names/.
@@ -26,26 +27,6 @@ const ESI_MAX_SINGLE_LOOKUPS = 100;
 
 /// EVE writes core_user_<id>.dat and core_char_<id>.dat together when a character logs out, so a user file whose mtime lands this close to a character file's is taken as that character's account. Heuristic only - the UI presents it as a suggestion.
 const MATCH_WINDOW_NS: u96 = 10 * std.time.ns_per_s;
-
-/// On-disk shape of accounts.json. `userIds` are EVE's own account IDs (from core_user_<id>.dat), linked so scan suggestions can map onto a user-named account.
-pub const AccountsFile = struct {
-    version: u32 = 1,
-    accounts: []const Account = &.{},
-    characters: []const CharacterLink = &.{},
-
-    pub const Account = struct {
-        id: []const u8,
-        name: []const u8,
-        userIds: []const []const u8 = &.{},
-    };
-
-    pub const CharacterLink = struct {
-        id: []const u8,
-        name: ?[]const u8 = null,
-        accountId: ?[]const u8 = null,
-        lastSeen: ?i64 = null,
-    };
-};
 
 const ScannedCharacter = struct {
     id: []const u8,
