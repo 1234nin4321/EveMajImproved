@@ -1566,9 +1566,140 @@ function clearRegion(fieldIds) {
     scheduleThumbnailPreview();
 }
 
-// fieldIds let the same overlay feed either RegionFit or notLoggedInSpace; edit adjusts the existing region's borders instead of dragging a new one.
+// Asks how to set a new Thumbnail Space region. Resolves to { mode: 'draw' }, { mode: 'display', rect }, or null if cancelled.
+let regionPickerData = null;
+let regionPickerSelected = null;
+
+function showRegionModeModal() {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('region-mode-modal');
+        const chooseStep = document.getElementById('region-mode-step-choose');
+        const displayStep = document.getElementById('region-mode-step-display');
+        const buttons = {
+            draw: document.getElementById('region-mode-draw'),
+            display: document.getElementById('region-mode-display'),
+            cancel: document.getElementById('region-mode-cancel'),
+            confirm: document.getElementById('region-display-confirm'),
+            back: document.getElementById('region-display-back'),
+            displayCancel: document.getElementById('region-display-cancel'),
+        };
+
+        const showStep = (step) => {
+            chooseStep.style.display = step === 'choose' ? '' : 'none';
+            displayStep.style.display = step === 'display' ? '' : 'none';
+        };
+        showStep('choose');
+        document.body.appendChild(modal);
+        modal.classList.add('show');
+
+        const finish = (result) => {
+            modal.classList.remove('show');
+            buttons.draw.removeEventListener('click', onDraw);
+            buttons.display.removeEventListener('click', onDisplay);
+            buttons.cancel.removeEventListener('click', onCancel);
+            buttons.confirm.removeEventListener('click', onConfirm);
+            buttons.back.removeEventListener('click', onBack);
+            buttons.displayCancel.removeEventListener('click', onCancel);
+            resolve(result);
+        };
+        const onDraw = () => finish({ mode: 'draw' });
+        const onCancel = () => finish(null);
+        const onBack = () => showStep('choose');
+        const onDisplay = async () => {
+            showStep('display');
+            await loadRegionDisplayPicker();
+        };
+        const onConfirm = () => {
+            const d = regionPickerData?.displays?.find(x => x.number === regionPickerSelected);
+            if (!d) return;
+            const useWork = document.getElementById('regionDisplayUseWorkArea')?.checked;
+            const r = useWork ? d.workArea : d.bounds;
+            finish({ mode: 'display', number: d.number, rect: { x: r.x, y: r.y, width: r.width, height: r.height } });
+        };
+
+        buttons.draw.addEventListener('click', onDraw);
+        buttons.display.addEventListener('click', onDisplay);
+        buttons.cancel.addEventListener('click', onCancel);
+        buttons.confirm.addEventListener('click', onConfirm);
+        buttons.back.addEventListener('click', onBack);
+        buttons.displayCancel.addEventListener('click', onCancel);
+    });
+}
+
+async function loadRegionDisplayPicker() {
+    const list = document.getElementById('regionDisplayList');
+    const confirmBtn = document.getElementById('region-display-confirm');
+    if (confirmBtn) confirmBtn.disabled = true;
+    if (list) list.innerHTML = `<p class="account-empty">${escapeHtml(t('status.scanningLabel'))}</p>`;
+    try {
+        regionPickerData = JSON.parse(await webui.call('getDisplays'));
+    } catch (error) {
+        logError('Failed to load displays for region picker:', error);
+        regionPickerData = { displays: [], desktop: { x: 0, y: 0, width: 0, height: 0 } };
+    }
+    const displays = regionPickerData.displays || [];
+    // Default to the display the current region sits on, else the primary.
+    const current = currentConfig?.display;
+    const centerX = current?.regionX + (current?.regionWidth || 0) / 2;
+    const centerY = current?.regionY + (current?.regionHeight || 0) / 2;
+    const containing = Number.isFinite(centerX) && displays.find(d =>
+        centerX >= d.bounds.x && centerX < d.bounds.x + d.bounds.width &&
+        centerY >= d.bounds.y && centerY < d.bounds.y + d.bounds.height);
+    regionPickerSelected = (containing || displays.find(d => d.primary) || displays[0])?.number ?? null;
+    renderRegionDisplayPicker();
+}
+
+function selectRegionDisplay(number) {
+    regionPickerSelected = number;
+    renderRegionDisplayPicker();
+}
+
+function renderRegionDisplayPicker() {
+    const diagram = document.getElementById('regionDisplayDiagram');
+    const list = document.getElementById('regionDisplayList');
+    const confirmBtn = document.getElementById('region-display-confirm');
+    const displays = regionPickerData?.displays || [];
+    if (diagram) renderDisplayDiagram(diagram, regionPickerData, regionPickerSelected, 'selectRegionDisplay', 180);
+    if (list) {
+        list.innerHTML = displays.length === 0
+            ? `<p class="account-empty">${escapeHtml(t('dynamic.displays.none'))}</p>`
+            : displays.map(d => `
+                <button type="button" class="region-display-option${d.number === regionPickerSelected ? ' is-selected' : ''}" onclick="selectRegionDisplay(${d.number})">
+                    <span class="display-card-number">${d.number}</span>
+                    <span class="region-display-option-name">${escapeHtml(d.name)}</span>
+                    <span class="region-display-option-meta">${d.modeWidth} × ${d.modeHeight}${d.refreshHz ? ` · ${d.refreshHz} Hz` : ''}${d.primary ? ` · ${escapeHtml(t('dynamic.displays.primary'))}` : ''}</span>
+                </button>`).join('');
+    }
+    if (confirmBtn) confirmBtn.disabled = regionPickerSelected === null;
+}
+
+function applyRegionValues(fieldIds, rect) {
+    setFieldValue(fieldIds.x, rect.x);
+    setFieldValue(fieldIds.y, rect.y);
+    setFieldValue(fieldIds.width, rect.width);
+    setFieldValue(fieldIds.height, rect.height);
+    currentConfig.display[fieldIds.x] = rect.x;
+    currentConfig.display[fieldIds.y] = rect.y;
+    currentConfig.display[fieldIds.width] = rect.width;
+    currentConfig.display[fieldIds.height] = rect.height;
+    refreshRegionButtons();
+    markAsChanged();
+    scheduleThumbnailPreview();
+}
+
+// fieldIds let the same overlay feed either RegionFit or notLoggedInSpace; edit adjusts the existing region's borders instead of dragging a new one. A new region first asks whether to draw one or use a whole display.
 async function startRegionSelectFlow(fieldIds, edit = false) {
     if (typeof webui === 'undefined' || regionSelectPollTimer) return;
+
+    if (!edit) {
+        const choice = await showRegionModeModal();
+        if (!choice) return;
+        if (choice.mode === 'display') {
+            applyRegionValues(fieldIds, choice.rect);
+            showStatus(t('status.regionSetToDisplay').replace('{n}', String(choice.number)), 'success');
+            return;
+        }
+    }
 
     try {
         const regionToEdit = edit ? currentRegionValues(fieldIds) : null;
@@ -1611,17 +1742,7 @@ async function startRegionSelectFlow(fieldIds, edit = false) {
             if (result.tooSmall) showStatus(t('status.regionSelectTooSmall'), 'info');
             if (result.cancelled) return;
 
-            setFieldValue(fieldIds.x, result.x);
-            setFieldValue(fieldIds.y, result.y);
-            setFieldValue(fieldIds.width, result.width);
-            setFieldValue(fieldIds.height, result.height);
-            currentConfig.display[fieldIds.x] = result.x;
-            currentConfig.display[fieldIds.y] = result.y;
-            currentConfig.display[fieldIds.width] = result.width;
-            currentConfig.display[fieldIds.height] = result.height;
-            refreshRegionButtons();
-            markAsChanged();
-            scheduleThumbnailPreview();
+            applyRegionValues(fieldIds, result);
             showStatus(t('status.regionSet'), 'success');
         } catch (err) {
             logWarn('Failed to poll region select result:', err);
@@ -4442,6 +4563,40 @@ function displayOrientationText(degrees) {
         : (degrees === 180 ? t('dynamic.displays.landscapeFlipped') : t('dynamic.displays.landscape'));
 }
 
+// Draws `data` (a getDisplays result) into `container` as clickable tiles, scaled to keep each display's real proportions and position; `onSelect` names the global function each tile calls with its display number. Shared by Display Config and the full-display region picker.
+function renderDisplayDiagram(container, data, selectedNumber, onSelect, maxHeight = 240) {
+    const displays = data?.displays || [];
+    if (displays.length === 0) {
+        container.innerHTML = '';
+        container.style.height = '0';
+        return;
+    }
+    const desk = data.desktop;
+    const boxWidth = container.clientWidth || 560;
+    const scale = Math.min((boxWidth - 16) / desk.width, (maxHeight - 16) / desk.height);
+    const usedWidth = desk.width * scale;
+    const usedHeight = desk.height * scale;
+    container.style.height = `${Math.round(usedHeight + 16)}px`;
+    const offsetX = (boxWidth - usedWidth) / 2;
+
+    container.innerHTML = displays.map(d => {
+        const left = offsetX + (d.bounds.x - desk.x) * scale;
+        const top = 8 + (d.bounds.y - desk.y) * scale;
+        const width = Math.max(d.bounds.width * scale - 4, 8);
+        const height = Math.max(d.bounds.height * scale - 4, 8);
+        const classes = ['display-tile'];
+        if (d.primary) classes.push('is-primary');
+        if (d.number === selectedNumber) classes.push('is-selected');
+        return `
+            <button type="button" class="${classes.join(' ')}" style="left:${left + 2}px;top:${top + 2}px;width:${width}px;height:${height}px"
+                onclick="${onSelect}(${d.number})" title="${escapeHtml(d.name)}" data-display-number="${d.number}">
+                <span class="display-tile-number">${d.number}</span>
+                <span class="display-tile-res">${d.modeWidth}×${d.modeHeight}</span>
+                ${d.primary ? `<span class="display-tile-primary">★</span>` : ''}
+            </button>`;
+    }).join('');
+}
+
 function renderDisplays() {
     const diagram = document.getElementById('displayDiagram');
     const list = document.getElementById('displayList');
@@ -4455,32 +4610,7 @@ function renderDisplays() {
         return;
     }
 
-    // Scale the virtual desktop into the diagram box, keeping each display's real proportions and position.
-    const desk = displaysData.desktop;
-    const boxWidth = diagram.clientWidth || 560;
-    const maxHeight = 240;
-    const scale = Math.min((boxWidth - 16) / desk.width, (maxHeight - 16) / desk.height);
-    const usedWidth = desk.width * scale;
-    const usedHeight = desk.height * scale;
-    diagram.style.height = `${Math.round(usedHeight + 16)}px`;
-    const offsetX = (boxWidth - usedWidth) / 2;
-
-    diagram.innerHTML = displays.map(d => {
-        const left = offsetX + (d.bounds.x - desk.x) * scale;
-        const top = 8 + (d.bounds.y - desk.y) * scale;
-        const width = Math.max(d.bounds.width * scale - 4, 8);
-        const height = Math.max(d.bounds.height * scale - 4, 8);
-        const classes = ['display-tile'];
-        if (d.primary) classes.push('is-primary');
-        if (d.number === selectedDisplayNumber) classes.push('is-selected');
-        return `
-            <button type="button" class="${classes.join(' ')}" style="left:${left + 2}px;top:${top + 2}px;width:${width}px;height:${height}px"
-                onclick="selectDisplay(${d.number})" title="${escapeHtml(d.name)}">
-                <span class="display-tile-number">${d.number}</span>
-                <span class="display-tile-res">${d.modeWidth}×${d.modeHeight}</span>
-                ${d.primary ? `<span class="display-tile-primary">★</span>` : ''}
-            </button>`;
-    }).join('');
+    renderDisplayDiagram(diagram, displaysData, selectedDisplayNumber, 'selectDisplay');
 
     list.innerHTML = displays.map(d => {
         const rows = [];

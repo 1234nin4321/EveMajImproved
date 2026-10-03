@@ -2788,6 +2788,47 @@
         </div>
     </div>
 
+    <div id="region-mode-modal" class="modal">
+        <div class="modal-content modal-wide">
+            <div id="region-mode-step-choose">
+                <h3 data-i18n="misc.region-mode-heading">New Thumbnail Region</h3>
+                <p class="hint" style="margin: 0 0 12px 0;" data-i18n="misc.region-mode-hint">How do you want to set this region?</p>
+                <div class="region-mode-choices">
+                    <button type="button" id="region-mode-draw" class="region-mode-choice">
+                        <span class="region-mode-choice-glyph" aria-hidden="true">▭</span>
+                        <span class="region-mode-choice-title" data-i18n="misc.region-mode-draw-title">Draw Your Own Region</span>
+                        <span class="region-mode-choice-hint" data-i18n="misc.region-mode-draw-hint">Drag a rectangle anywhere on your screens.</span>
+                    </button>
+                    <button type="button" id="region-mode-display" class="region-mode-choice">
+                        <span class="region-mode-choice-glyph" aria-hidden="true">▣</span>
+                        <span class="region-mode-choice-title" data-i18n="misc.region-mode-display-title">Full Display</span>
+                        <span class="region-mode-choice-hint" data-i18n="misc.region-mode-display-hint">Use a whole display. Pick which one next.</span>
+                    </button>
+                </div>
+                <div class="modal-buttons">
+                    <button type="button" id="region-mode-cancel" class="button-outline" data-i18n="common.cancel">Cancel</button>
+                </div>
+            </div>
+
+            <div id="region-mode-step-display" style="display: none;">
+                <h3 data-i18n="misc.region-display-heading">Choose a Display</h3>
+                <p class="hint" style="margin: 0 0 8px 0;" data-i18n="misc.region-display-hint">Click the display the thumbnails should fill.</p>
+                <div id="regionDisplayDiagram" class="display-diagram"></div>
+                <div id="regionDisplayList" class="region-display-list"></div>
+                <label>
+                    <input type="checkbox" id="regionDisplayUseWorkArea" data-untracked checked>
+                    <span class="label-body" data-i18n="field.regionDisplayUseWorkArea.label">Leave Room for the Taskbar</span>
+                </label>
+                <p class="hint hint-extra" data-i18n="field.regionDisplayUseWorkArea.hint">Fills the display's work area so thumbnails don't sit under the taskbar.</p>
+                <div class="modal-buttons">
+                    <button type="button" id="region-display-confirm" class="button-primary" data-i18n="button.region-display-confirm.label">Use This Display</button>
+                    <button type="button" id="region-display-back" class="button-outline" data-i18n="common.back">Back</button>
+                    <button type="button" id="region-display-cancel" class="button-outline" data-i18n="common.cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="eve-settings-characters-modal" class="modal">
         <div class="modal-content modal-wide">
             <h3 data-i18n="misc.eve-settings-characters-heading">Add Characters from EVE Settings?</h3>
