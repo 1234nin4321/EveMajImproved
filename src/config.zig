@@ -7,6 +7,7 @@ const types = @import("types.zig");
 pub const display_grid = @import("display_grid.zig");
 const profile_name_mod = @import("profile_name.zig");
 const color = @import("color.zig");
+const accounts_store = @import("accounts_store.zig");
 
 const slog = log.scoped("config");
 
@@ -2090,6 +2091,8 @@ pub const Config = struct {
 
     hotkeyGroups: std.ArrayList(HotkeyGroup),
     accountHotkeys: std.ArrayList(AccountHotkey),
+    /// Copy of Account Config's accounts and character links, carried in the profile so they travel with it (see accounts_store.Snapshot). The app itself keeps reading accounts.json; this only round-trips.
+    accountLinks: accounts_store.OwnedSnapshot = .{},
     requireEveFocus: bool = false,
     resetGroupIndexOnNonGroupFocus: bool = false,
     allowHotkeyAutoRepeat: bool = false,
@@ -2132,6 +2135,7 @@ pub const Config = struct {
         systemColors: []const SystemColor.Wire = &.{},
         hotkeyGroups: []const HotkeyGroup.Wire = &.{},
         accountHotkeys: []const AccountHotkey.Wire = &.{},
+        accountLinks: accounts_store.Snapshot = .{},
         // Read-only legacy: merged into hotkeyGroups on load and always written back empty.
         quickGroups: []const HotkeyGroup.LegacyQuickGroupWire = &.{},
         // Nested (not flattened onto Config.Wire directly) because config_dialog.js's in-memory currentConfig object keeps these under a "hotkeys" sub-object throughout the file, not just in the wire JSON shape.
@@ -2196,6 +2200,7 @@ pub const Config = struct {
             .systemColors = sys_colors,
             .hotkeyGroups = groups,
             .accountHotkeys = account_hotkeys,
+            .accountLinks = self.accountLinks.value,
             .hotkeys = .{
                 .requireEveFocus = self.requireEveFocus,
                 .resetGroupIndexOnNonGroupFocus = self.resetGroupIndexOnNonGroupFocus,
@@ -2326,6 +2331,8 @@ pub const Config = struct {
 
         try cfg.accountHotkeys.ensureTotalCapacity(allocator, w.accountHotkeys.len);
         for (w.accountHotkeys) |ahw| cfg.accountHotkeys.appendAssumeCapacity(try AccountHotkey.fromWire(ahw, allocator));
+
+        cfg.accountLinks = try accounts_store.OwnedSnapshot.init(allocator, w.accountLinks);
 
         return cfg;
     }
@@ -4542,6 +4549,7 @@ pub const Config = struct {
 
         for (self.accountHotkeys.items) |*ah| ah.deinit(allocator);
         self.accountHotkeys.deinit(allocator);
+        self.accountLinks.deinit();
 
         self.chatlog.deinit(allocator);
         self.combat.deinit(allocator);

@@ -1032,6 +1032,36 @@ Uses the same [supported keys](#hotkey-groups-character-cycling) as hotkey group
 
 Assigning the same hotkey to more than one character turns it into an implicit cycling group - each press jumps to the next running character sharing that key, in profile order.
 
+### Account Key Bindings and Account Links
+
+The config dialog's **Account Config** tab groups characters into accounts, and its **Key Binding** tab binds keys to those accounts. Both are stored in the profile:
+
+```json
+{
+  "accountHotkeys": [
+    { "hotkey": "F5", "accountId": "acc_m1x2y3ab" }
+  ],
+  "accountLinks": {
+    "accounts": [
+      { "id": "acc_m1x2y3ab", "name": "Main Account", "userIds": ["12345678"] }
+    ],
+    "characters": [
+      { "id": "90000001", "name": "Main Character", "accountId": "acc_m1x2y3ab" }
+    ]
+  }
+}
+```
+
+**accountHotkeys**: Each entry brings the bound account's running client to the front; pressing the key again cycles through that account's other running characters. Entries that share a key cycle across all of their accounts. Uses the same [supported keys](#hotkey-groups-character-cycling) as hotkey groups.
+
+**accountLinks**: A copy of the accounts and the characters linked to them (`userIds` are EVE's own account IDs, used to suggest an account for newly scanned characters). `profiles\accounts.json` remains the live copy shared by all profiles - it is what the app reads, and Account Config writes it on every edit. The dialog refreshes `accountLinks` each time the profile is saved, so a profile file that is shared, backed up or moved to another PC carries its accounts with it. Characters not linked to any account are left out. Because a shared profile now includes these names and IDs, remove `accountLinks` from a file before handing it to someone who shouldn't see them.
+
+When the config dialog opens on a PC with no accounts yet (a fresh install, or a `profiles` folder copied over without `accounts.json`), it creates `accounts.json` from the open profile's `accountLinks` by itself, so the profile's account key bindings work right away. It never does this over existing accounts.
+
+To merge them into existing accounts, use **Import Settings** in the config dialog on an EVE-Maj profile file and tick:
+- **Accounts & Character Links** - merges into `accounts.json` on this PC. An imported account is matched to an existing one by ID, then by name; anything unmatched is added. Imported character links replace that character's current account; nothing is removed.
+- **Account Key Bindings** - adds the file's `accountHotkeys` to the current profile, re-pointed at the matching local accounts. Bindings whose account isn't on this PC are skipped unless the accounts are imported too.
+
 ### Notified-Character Cycling
 
 Bound via `hotkeyCycleNotified` and `hotkeyPreviousNotified` (see [Hotkey Configuration](#hotkey-configuration)), these hotkeys jump to whichever character most recently triggered a notification, without needing to click through thumbnails to find who needs attention.

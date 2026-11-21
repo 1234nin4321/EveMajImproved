@@ -1255,7 +1255,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (ready) {
         // Fire independent calls immediately instead of serializing a round trip each - only loadProfileList()'s completion is needed below.
         const profileListLoaded = loadProfileList();
-        loadConfigurationFromBackend();
+        const configLoaded = loadConfigurationFromBackend();
         const globalSettingsLoaded = loadGlobalSettingsFromBackend();
         loadAppVersion();
         loadDefaultConfig();
@@ -1263,7 +1263,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         startMainAppStatusPolling();
         refreshWindowPositionSourceOptions();
         scanUltraPotatoProfiles();
-        loadAccountsData();
+        const accountsLoaded = loadAccountsData();
+        // Not awaited: seeding only needs both loads, nothing below waits on it.
+        Promise.all([configLoaded, accountsLoaded]).then(seedAccountsFromProfile);
 
         await profileListLoaded;
         // Best-effort assumption: whatever profile the app loaded with is live. Only "Make It Live" or a Save updates liveConfirmedProfile after this.
@@ -3964,6 +3966,8 @@ const MAJ_SECTIONS = [
     { id: 'characters', titleKey: 'dynamic.import.maj.characters.title', hintKey: 'dynamic.import.maj.characters.hint', kind: 'array' },
     { id: 'systemColors', titleKey: 'dynamic.import.maj.systemColors.title', hintKey: 'dynamic.import.maj.systemColors.hint', kind: 'array' },
     { id: 'hotkeyGroups', titleKey: 'dynamic.import.maj.hotkeyGroups.title', hintKey: 'dynamic.import.maj.hotkeyGroups.hint', kind: 'array' },
+    { id: 'accountLinks', titleKey: 'dynamic.import.maj.accountLinks.title', hintKey: 'dynamic.import.maj.accountLinks.hint', kind: 'accounts' },
+    { id: 'accountHotkeys', titleKey: 'dynamic.import.maj.accountHotkeys.title', hintKey: 'dynamic.import.maj.accountHotkeys.hint', kind: 'array' },
     { id: 'windowFilters', titleKey: 'dynamic.import.maj.windowFilters.title', hintKey: 'dynamic.import.maj.windowFilters.hint', kind: 'array' },
 ];
 
@@ -3974,6 +3978,10 @@ function computeMajImportSections(data) {
         if (s.kind === 'array') {
             const arr = Array.isArray(data[s.id]) ? data[s.id] : [];
             return { id: s.id, title, hint: `${hint} (${arr.length})`, available: arr.length > 0 };
+        }
+        if (s.kind === 'accounts') {
+            const count = importedAccountList(data[s.id]).length;
+            return { id: s.id, title, hint: `${hint} (${count})`, available: count > 0 };
         }
         return { id: s.id, title, hint, available: data[s.id] !== undefined && data[s.id] !== null };
     });
@@ -4034,6 +4042,36 @@ async function applyMajImport(checked, allNotes) {
         if (!currentConfig.windowFilters) currentConfig.windowFilters = [];
         mergeMajByKey(currentConfig.windowFilters, data.windowFilters, 'name');
         allNotes.push(t('dynamic.import.maj.windowFiltersImportedNote').replace('{n}', data.windowFilters.length));
+    }
+
+    // Accounts first: key bindings below are re-pointed at whichever local account each imported one ended up as.
+    const importAccounts = checked('accountLinks');
+    const accountMerge = mergeImportedAccountLinks(data.accountLinks, importAccounts);
+    if (importAccounts) {
+        await saveAccountsData();
+        renderAccountsPanel();
+        allNotes.push(t('dynamic.import.maj.accountLinksImportedNote')
+            .replace('{accounts}', accountMerge.idMap.size)
+            .replace('{added}', accountMerge.added)
+            .replace('{characters}', accountMerge.linked));
+    }
+    if (checked('accountHotkeys') && Array.isArray(data.accountHotkeys)) {
+        saveAccountKeyBindings();
+        const bindings = currentAccountHotkeys();
+        let imported = 0;
+        let skipped = 0;
+        data.accountHotkeys.forEach(src => {
+            const accountId = accountMerge.idMap.get(src?.accountId) || (findAccount(src?.accountId) ? src.accountId : null);
+            if (!accountId) {
+                skipped++;
+                return;
+            }
+            const hotkey = src.hotkey || null;
+            if (!bindings.some(b => b.accountId === accountId && (b.hotkey || null) === hotkey)) bindings.push({ hotkey, accountId });
+            imported++;
+        });
+        allNotes.push(t('dynamic.import.maj.accountHotkeysImportedNote').replace('{n}', imported));
+        if (skipped > 0) allNotes.push(t('dynamic.import.maj.accountHotkeysSkippedNote').replace('{n}', skipped));
     }
 }
 
@@ -4590,6 +4628,8 @@ async function saveConfigurationImpl() {
         saveAppHotkeys();
         saveUrlHotkeys();
         saveAccountKeyBindings();
+        // Never from a failed load: that would replace the profile's copy with an empty one.
+        if (accountsDataLoaded) currentConfig.accountLinks = accountLinksSnapshot();
         saveOreTable();
 
         if (!currentGlobalSettings) currentGlobalSettings = {};
@@ -7100,6 +7140,7 @@ async function applyUltraPotatoMode() {
 // ---- Account Config ----
 // Saved to profiles/accounts.json on every edit (not via saveConfiguration()), since it's shared by all profiles and only config.exe uses it.
 let accountsData = { version: 1, accounts: [], characters: [] };
+let accountsDataLoaded = false;
 // Latest scanEveAccounts() result keyed by character ID; null until the first scan finishes.
 let accountScanById = null;
 let accountScanStarted = false;
@@ -7117,6 +7158,7 @@ async function loadAccountsData() {
             // IDs are interpolated into onclick handlers, so anything non-numeric from a hand-edited file is dropped here.
             characters: (Array.isArray(data.characters) ? data.characters : []).filter(c => EVE_ID_PATTERN.test(String(c.id))),
         };
+        accountsDataLoaded = true;
     } catch (error) {
         logError('Failed to load accounts:', error);
     }
@@ -7132,6 +7174,78 @@ async function saveAccountsData() {
         logError('Failed to save accounts:', error);
         showStatus(t('status.accountsSaveFailed') + error.message, 'error');
     }
+}
+
+// ---- Account links carried in the profile (config.accountLinks; accounts_store.zig's Snapshot) ----
+// accounts.json stays the live source. Each profile save embeds this copy so a shared, backed-up or moved profile file brings its accounts along; Import Settings merges it back (mergeImportedAccountLinks).
+// Only characters linked to an account go in: the rest of accounts.json is this PC's scan cache, which a shared profile has no business carrying.
+function accountLinksSnapshot() {
+    const accounts = accountsData.accounts.map(a => ({ id: a.id, name: a.name, userIds: [...(a.userIds || [])] }));
+    const accountIds = new Set(accounts.map(a => a.id));
+    const characters = accountsData.characters
+        .filter(c => c.accountId && accountIds.has(c.accountId))
+        .map(c => ({ id: String(c.id), name: c.name || null, accountId: c.accountId }));
+    return { accounts, characters };
+}
+
+// A PC with no accounts yet (fresh install, or a profile folder copied over without accounts.json) takes them from the open profile's accountLinks, so its account key bindings work without a manual Import Settings.
+// Never after a failed load, and never over existing accounts - those are merged only on request through Import Settings.
+async function seedAccountsFromProfile() {
+    if (!accountsDataLoaded || accountsData.accounts.length > 0 || !currentConfig) return;
+    if (importedAccountList(currentConfig.accountLinks).length === 0) return;
+    const merge = mergeImportedAccountLinks(currentConfig.accountLinks, true);
+    await saveAccountsData();
+    renderAccountsPanel();
+    showStatus(t('dynamic.accounts.seededFromProfile')
+        .replace('{accounts}', merge.added)
+        .replace('{characters}', merge.linked), 'info');
+}
+
+// The usable accounts of an imported accountLinks block; the file may be hand-edited or come from someone else.
+function importedAccountList(links) {
+    const accounts = links && Array.isArray(links.accounts) ? links.accounts : [];
+    return accounts.filter(a => a && typeof a.id === 'string' && a.id && typeof a.name === 'string' && a.name.trim());
+}
+
+// Matches each imported account to a local one - by ID (the same setup re-imported), then by name - and returns idMap (imported ID -> local ID).
+// With `apply`, unmatched accounts are created and the imported character links and EVE account IDs are merged into accountsData; the caller saves. Without it nothing changes and idMap only covers accounts already here.
+function mergeImportedAccountLinks(links, apply) {
+    const idMap = new Map();
+    let added = 0;
+    let linked = 0;
+
+    importedAccountList(links).forEach(src => {
+        const name = src.name.trim();
+        let local = findAccount(src.id) || accountsData.accounts.find(a => String(a.name).trim().toLowerCase() === name.toLowerCase());
+        if (!local && apply) {
+            local = { id: src.id, name, userIds: [] };
+            accountsData.accounts.push(local);
+            added++;
+        }
+        if (!local) return;
+        idMap.set(src.id, local.id);
+        if (!apply) return;
+        (Array.isArray(src.userIds) ? src.userIds : []).map(String).forEach(userId => {
+            // An EVE account ID another local account already claims stays where it is.
+            if (EVE_ID_PATTERN.test(userId) && !accountForUserId(userId)) local.userIds = [...(local.userIds || []), userId];
+        });
+    });
+    if (!apply) return { idMap, added, linked };
+
+    (links && Array.isArray(links.characters) ? links.characters : []).forEach(src => {
+        const id = String(src?.id ?? '');
+        const accountId = idMap.get(src?.accountId);
+        if (!EVE_ID_PATTERN.test(id) || !accountId) return;
+        let link = findAccountCharacter(id);
+        if (!link) {
+            link = { id, name: null, accountId: null, lastSeen: null };
+            accountsData.characters.push(link);
+        }
+        if (!link.name && typeof src.name === 'string' && src.name) link.name = src.name;
+        link.accountId = accountId;
+        linked++;
+    });
+    return { idMap, added, linked };
 }
 
 async function scanEveAccounts() {
